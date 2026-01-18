@@ -94,6 +94,8 @@ alias infopanel='wtfutil'
 alias day='darkman set light'
 alias night='darkman set dark'
 alias config='/usr/bin/git --git-dir=$HOME/.dotfiles --work-tree=$HOME'
+alias mynat='pystun3'
+alias myexactnat='stun'
 # 如果你安装了系统级的 node (sudo pacman -S nodejs)，保留 node 命令指向它作为备用
 # 如果你想强制全用 bun，可以解开下面这行：
 # alias node='bun'
