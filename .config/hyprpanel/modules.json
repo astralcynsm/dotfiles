@@ -1,0 +1,14 @@
+{
+    "custom/rime": {
+        "icon": "",
+        "label": "{text}",
+        "tooltip": "{tooltip}",
+        "truncationSize": -1,
+        "execute": "cat /tmp/rime_status.json 2>/dev/null || echo '{\"text\":\"Waiting...\"}'",
+        "interval": 150, 
+        "hideOnEmpty": false,
+        "actions": {
+            "onLeftClick": "exec hyprctl dispatch exec 'kitty --class floating -e watch -n 1 cat ~/.local/share/fcitx5/rime/py_wordscounter/words_count_history.json'"
+        }
+    }
+}

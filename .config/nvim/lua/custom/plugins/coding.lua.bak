@@ -1,0 +1,183 @@
+return {
+  -- ==========================================
+  -- 1. 自动补全括号 (Autopairs)
+  -- ==========================================
+  {
+    'windwp/nvim-autopairs',
+    event = 'InsertEnter',
+    dependencies = { 'hrsh7th/nvim-cmp' },
+    config = function()
+      local npairs = require 'nvim-autopairs'
+      npairs.setup {}
+      -- 如果你希望选中函数补全时自动加上括号 ()
+      local cmp_autopairs = require 'nvim-autopairs.completion.cmp'
+      local cmp = require 'cmp'
+      cmp.event:on('confirm_done', cmp_autopairs.on_confirm_done())
+    end,
+  },
+
+  -- ==========================================
+  -- 2. LSP 基础配置 & Mason (包管理器)
+  -- ==========================================
+  {
+    'neovim/nvim-lspconfig',
+    dependencies = {
+      -- 自动安装 LSP 和工具
+      { 'williamboman/mason.nvim', config = true }, -- 必须先加载 Mason
+      'williamboman/mason-lspconfig.nvim',
+      'WhoIsSethDaniel/mason-tool-installer.nvim',
+
+      -- LSP 状态显示插件 (右上角加载圈)
+      { 'j-hui/fidget.nvim', opts = {} },
+
+      -- 它是用来让 Lua 开发更舒服的 (配置 Neovim 本身时有提示)
+      -- { 'folke/neodev.nvim', opts = {} }, -- 和lazydev冲突
+    },
+    config = function()
+      -- 当 LSP 附加到 buffer 时运行的函数
+      vim.api.nvim_create_autocmd('LspAttach', {
+        group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
+        callback = function(event)
+          -- 定义 helper 函数简化按键映射
+          local map = function(keys, func, desc)
+            vim.keymap.set('n', keys, func, { buffer = event.buf, desc = 'LSP: ' .. desc })
+          end
+
+          -- 常用快捷键
+          map('gd', require('telescope.builtin').lsp_definitions, '[G]oto [D]efinition')
+          map('gr', require('telescope.builtin').lsp_references, '[G]oto [R]eferences')
+          map('K', vim.lsp.buf.hover, 'Hover Documentation') -- 显示函数文档
+          map('<leader>rn', vim.lsp.buf.rename, '[R]e[n]ame')
+          map('<leader>ca', vim.lsp.buf.code_action, '[C]ode [A]ction')
+        end,
+      })
+
+      -- 增强 LSP 的补全能力
+      local capabilities = vim.lsp.protocol.make_client_capabilities()
+      capabilities = vim.tbl_deep_extend('force', capabilities, require('cmp_nvim_lsp').default_capabilities())
+
+      -- 配置 Mason 自动安装的服务器
+      require('mason').setup()
+
+      -- 你可以在这里添加你需要的语言服务器
+      local servers = {
+        -- Python (既然你做 LeetCode)
+        pyright = {},
+        gopls = {},
+        -- Lua (既然你写 Neovim 配置)
+        lua_ls = {
+          settings = {
+            Lua = {
+              completion = {
+                callSnippet = 'Replace',
+              },
+            },
+          },
+        },
+        -- 其他语言可以加在这里，比如: clangd = {}, html = {}, cssls = {}
+      }
+
+      require('mason-lspconfig').setup {
+        ensure_installed = vim.tbl_keys(servers),
+        handlers = {
+          function(server_name)
+            local server = servers[server_name] or {}
+            -- 处理 capabilities (补全能力)
+            server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+            require('lspconfig')[server_name].setup(server)
+          end,
+        },
+      }
+    end,
+  },
+
+  -- ==========================================
+  -- 3. 补全引擎 (Nvim-CMP)
+  -- ==========================================
+  {
+    'hrsh7th/nvim-cmp',
+    event = 'InsertEnter',
+    dependencies = {
+      -- 补全源
+      'hrsh7th/cmp-nvim-lsp', -- 来源于 LSP
+      'hrsh7th/cmp-path', -- 来源于文件路径
+      'hrsh7th/cmp-buffer', -- 来源于当前 Buffer 内容
+
+      -- Snippet 引擎 (必须有，否则 CMP 会报错)
+      {
+        'L3MON4D3/LuaSnip',
+        build = (function()
+          -- Linux 下编译加速，如果不成功也没关系
+          if vim.fn.has 'win32' == 1 or vim.fn.executable 'make' == 0 then
+            return
+          end
+          return 'make install_jsregexp'
+        end)(),
+        dependencies = {
+          -- 大量预设的代码片段
+          {
+            'rafamadriz/friendly-snippets',
+            config = function()
+              require('luasnip.loaders.from_vscode').lazy_load()
+            end,
+          },
+        },
+      },
+      'saadparwaiz1/cmp_luasnip',
+    },
+    config = function()
+      local cmp = require 'cmp'
+      local luasnip = require 'luasnip'
+      luasnip.config.setup {}
+
+      cmp.setup {
+        snippet = {
+          expand = function(args)
+            luasnip.lsp_expand(args.body)
+          end,
+        },
+        completion = { completeopt = 'menu,menuone,noinsert' },
+
+        -- 按键映射 (关键！)
+        mapping = cmp.mapping.preset.insert {
+          ['<C-n>'] = cmp.mapping.select_next_item(), -- 下一个
+          ['<C-p>'] = cmp.mapping.select_prev_item(), -- 上一个
+          ['<C-b>'] = cmp.mapping.scroll_docs(-4),
+          ['<C-f>'] = cmp.mapping.scroll_docs(4),
+
+          -- 确认补全 (Enter)
+          ['<CR>'] = cmp.mapping.confirm { select = true },
+
+          -- 手动触发补全 (Ctrl + Space)
+          ['<C-Space>'] = cmp.mapping.complete {},
+
+          -- Tab 键逻辑 (支持跳过 Snippet 参数)
+          ['<Tab>'] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_next_item()
+            elseif luasnip.expand_or_locally_jumpable() then
+              luasnip.expand_or_jump()
+            else
+              fallback()
+            end
+          end, { 'i', 's' }),
+          ['<S-Tab>'] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_prev_item()
+            elseif luasnip.locally_jumpable(-1) then
+              luasnip.jump(-1)
+            else
+              fallback()
+            end
+          end, { 'i', 's' }),
+        },
+        sources = {
+          { name = 'nvim_lsp' }, -- 优先显示 LSP 结果
+          { name = 'luasnip' },
+          { name = 'path' },
+          { name = 'buffer' },
+        },
+      }
+    end,
+  },
+}
