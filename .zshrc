@@ -38,6 +38,9 @@ export GOPATH=$HOME/go
 export GOBIN=$GOPATH/bin 
 export PATH=$PATH:$GOBIN
 
+# atuin
+eval "$(atuin init zsh)"
+
 deferred_init() {
     eval "$(zoxide init zsh)"
     [ -f /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ] && source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
