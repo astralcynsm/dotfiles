@@ -66,12 +66,17 @@ alias hypr='cd ~/.config/hypr'
 alias :q='exit'
 alias whereami='pwd'
 alias yay='p yay'
-alias paru='p paru'
+# alias paru='p paru'
 alias upd='update-desktop-database ~/.local/share/applications'
 alias wtf='p tldr'
 alias iwantto='navi'
 alias cheat='cht.sh'
-alias trans='p trans'
+alias trzh='p trans -t zh -b'
+alias tren='p trans -t en -b'
+alias trno='p trans -t no -b'
+alias dzh='p trans -t zh'
+alias den='p trans -t en'
+alias dno='p trans -t no'
 alias http='export http_proxy=http://127.0.0.1:7897'
 alias https='export https_proxy=http://127.0.0.1:7897'
 alias rclone='p rclone'
@@ -83,7 +88,8 @@ alias npm='bun'
 alias npx='bunx'
 alias de='deactivate'
 alias puv='p uv'
-alias ask='noglob lama'
+alias asktech='noglob lama'
+alias ask='ollama run gemini-3-flash-preview'
 alias trl='noglob translate'
 alias ins='paru -S'
 alias insys='sudo pacman -S'
@@ -95,7 +101,9 @@ alias day='darkman set light'
 alias night='darkman set dark'
 alias config='/usr/bin/git --git-dir=$HOME/.dotfiles --work-tree=$HOME'
 alias mynat='pystun3'
-alias myexactnat='stun'
+alias myexactnat='stunclient'
+alias crtterm='cool-retro-term'
+alias hd2mod='protontricks-launch --appid 553850 /mnt/Storage/HD2ModManager\ 1.3.0.1\ \(EOL\)-109-1-3-0-1-1758909252/Helldivers2ModManager.exe'
 # 如果你安装了系统级的 node (sudo pacman -S nodejs)，保留 node 命令指向它作为备用
 # 如果你想强制全用 bun，可以解开下面这行：
 # alias node='bun'
@@ -158,19 +166,6 @@ rand() {
   fi
 }
 
-# Translate Loop
-trloop() {
-  export http_proxy=$PROXY_HTTP
-  export https_proxy=$PROXY_HTTP
-    echo "进入翻译模式... (Ctrl+D 退出)"
-    local prompt="=> "
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && trans "$line"
-        echo -n "$prompt"
-    done
-    unset http_proxy https_proxy
-    echo -e "\n已退出翻译模式。"
-}
 
 fuck() {
   local text 
@@ -269,6 +264,7 @@ translate() {
     echo "User: $* \nYou are a translator from now on. Mainly between English and Chinese, sometimes maybe some Norsk and other languages. Your mission is to translate “信达雅”-ly, but you may also translate in a humanic way or 'Internet' way. Only output the translation result but anything else. Additional requirements of user would be written inside []s. " | ollama run gemini-3-flash-preview
 }
 
+
 # 切换为英文环境
 iwannabeenglish() {
     # 使用 localectl 修改系统配置
@@ -300,10 +296,22 @@ spectro() {
     | chafa -s 120x40 -f symbols -
 }
 
+musictags() {
+    docker run -d \
+  --name musictag \
+  -p 8001:8001 \
+  -v /mnt/Storage/Music:/app/media \
+  -v $HOME/.config/musictag:/app/data \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -e UMASK=022 \
+  xhongc/music_tag_web:latest
+}
+
 # --- Initialization ---
 
-bindkey -v
-export KEYTIMEOUT=1
+# bindkey -v
+# export KEYTIMEOUT=1
 
 
 export CRYPTOGRAPHY_OPENSSL_NO_LEGACY=1

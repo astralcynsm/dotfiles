@@ -313,6 +313,61 @@ require('lazy').setup({
   -- Then, because we use the `opts` key (recommended), the configuration runs
   -- after the plugin has been loaded as `require(MODULE).setup(opts)`.
 
+  {
+    'yetone/avante.nvim',
+    event = 'VeryLazy',
+    version = false,
+    ---@module 'avante'
+    ---@type avante.Config
+    opts = {
+      -- add any opts here
+      instructions_file = 'avante.md',
+      provider = 'claude-code',
+      acp_providers = {
+        ['claude-code'] = {
+          command = 'npx',
+          args = { '@zed-industries/claude-code-acp' },
+          env = {
+            NODE_NO_WARNINGS = '1',
+            -- ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY"),
+          },
+        },
+      },
+    },
+    dependencies = {
+      'nvim-lua/plenary.nvim',
+      'MunifTanjim/nui.nvim',
+      'nvim-mini/mini.pick',
+      'hrsh7th/nvim-cmp',
+      'ibhagwan/fzf-lua',
+      'stevearc/dressing.nvim',
+      'folke/snacks.nvim',
+      'nvim-tree/nvim-web-devicons',
+      'zbirenbaum/copilot.lua',
+      {
+        'HakonHarnes/img-clip.nvim',
+        event = 'VeryLazy',
+        opts = {
+          default = {
+            embed_image_as_base64 = false,
+            prompt_for_file_name = false,
+            drag_and_drop = {
+              insert_mode = true,
+            },
+            use_absolute_path = true,
+          },
+        },
+      },
+      {
+        'MeanderingProgrammer/render-markdown.nvim',
+        opts = {
+          file_types = { 'markdown', 'Avante' },
+        },
+        ft = { 'markdown', 'Avante' },
+      },
+    },
+  },
+
   { -- Useful plugin to show you pending keybinds.
     'folke/which-key.nvim',
     event = 'VimEnter', -- Sets the loading event to 'VimEnter'
@@ -689,6 +744,7 @@ require('lazy').setup({
         clangd = {},
         gopls = {},
         pyright = {},
+        marksman = {},
         -- rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --

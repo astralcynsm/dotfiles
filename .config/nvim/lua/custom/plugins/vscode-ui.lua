@@ -1,49 +1,5 @@
 return {
-  -- 1.Neo-tree
-  {
-    'nvim-neo-tree/neo-tree.nvim',
-    branch = 'v3.x',
-    dependencies = {
-      'nvim-lua/plenary.nvim',
-      'nvim-tree/nvim-web-devicons',
-      'MunifTanjim/nui.nvim',
-    },
-    -- 【关键】让 Lazy 在检测到我们要打开目录时，提前加载插件
-    init = function()
-      if vim.fn.argc() == 1 then
-        local stat = vim.loop.fs_stat(vim.fn.argv(0))
-        if stat and stat.type == 'directory' then
-          require 'neo-tree'
-        end
-      end
-    end,
-
-    keys = {
-      { '<leader>e', '<cmd>Neotree toggle<cr>', desc = 'Explorer (Toggle)' },
-      { '<leader>o', '<cmd>Neotree focus<cr>', desc = 'Explorer (Focus)' },
-    },
-
-    opts = {
-      filesystem = {
-        -- 【核心】hijack_netrw_behavior
-        -- "open_default": 用 Neo-tree 替换 netrw，并在启动时像普通 buffer 一样打开
-        -- 这就是你要的 LazyVim 同款体验
-        hijack_netrw_behavior = 'open_default',
-
-        filtered_items = {
-          visible = true,
-          hide_dotfiles = false,
-          hide_gitignored = false,
-        },
-        follow_current_file = { enabled = true },
-        use_libuv_file_watcher = true, -- 自动检测文件变动
-      },
-      window = {
-        position = 'left',
-        width = 30,
-      },
-    },
-  },
+  -- 1.Neotree
   -- ==========================================
   -- 2. 优雅关闭 Buffer (Mini.bufremove)
   -- ==========================================
@@ -140,7 +96,7 @@ return {
     event = 'VeryLazy',
     dependencies = {
       'MunifTanjim/nui.nvim',
-      'rcarriga/nvim-notify',
+      -- 'rcarriga/nvim-notify',
     },
     opts = {
       lsp = {
