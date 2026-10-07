@@ -17,7 +17,7 @@ local scriptsDir = os.getenv("HOME") .. "/.config/hypr/scripts"
 local UserConfigs = os.getenv("HOME") .. "/.config/hypr/UserConfigs"
 local UserScripts = os.getenv("HOME") .. "/.config/hypr/UserScripts"
 
-hl.bind("CTRL + ALT + Delete", hl.dsp.exec_cmd("hyprctl dispatch exit 0")) -- exit Hyprland
+hl.bind("CTRL + ALT + Delete", hl.dsp.exit()) -- exit Hyprland
 hl.bind(mainMod .. " + Q", hl.dsp.window.close()) -- close active (not kill)
 hl.bind(mainMod .. " + SHIFT + Q", hl.dsp.exec_cmd(scriptsDir .. "/KillActiveProcess.sh")) -- Kill active process
 hl.bind("CTRL + ALT + L", hl.dsp.exec_cmd(scriptsDir .. "/LockScreen.sh")) -- screen lock
@@ -37,7 +37,7 @@ hl.bind(mainMod .. " + SHIFT + I", hl.dsp.layout("togglesplit")) -- only works o
 hl.bind(mainMod .. " + P", hl.dsp.window.pseudo()) -- dwindle
 
 -- Works on either layout (Master or Dwindle)
-hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("hyprctl dispatch splitratio 0.3"))
+hl.bind(mainMod .. " + M", hl.dsp.layout("splitratio 0.3"))
 
 -- group
 hl.bind(mainMod .. " + G", hl.dsp.group.toggle()) -- toggle group

@@ -83,7 +83,8 @@ alias http='export http_proxy=http://127.0.0.1:7890'
 alias https='export https_proxy=http://127.0.0.1:7890'
 alias rclone='p rclone'
 alias sto='cd /mnt/Storage'
-alias hrun='hyprctl dispatch exec'
+# [0.56 迁移] hyprctl dispatch 字符串形式已移除，改为包一层 Lua
+hrun() { hyprctl dispatch "hl.dsp.exec_cmd(\"$*\")" }
 alias leet='nvim -c "Leet"'
 alias gh='p gh'
 alias npm='bun'

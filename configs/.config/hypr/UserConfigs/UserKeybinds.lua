@@ -62,12 +62,12 @@ hl.bind(mainMod .. " + CTRL + SHIFT + R", hl.dsp.exec_cmd("pkill rofi || true &&
 
 -- hl.bind(mainMod .. " + SHIFT + F", hl.dsp.window.fullscreen()) -- whole full screen
 -- hl.bind(mainMod .. " + CTRL + F", hl.dsp.window.fullscreen({ mode = "maximized" })) -- fake full screen
-hl.bind(mainMod .. " + ALT + SPACE", hl.dsp.exec_cmd("hyprctl dispatch workspaceopt allfloat")) --All Float Mode
+hl.bind(mainMod .. " + ALT + SPACE", hl.dsp.exec_cmd(scriptsDir .. "/AllFloat.sh")) --All Float Mode (0.56: workspaceopt allfloat 已移除，脚本用 float dispatcher 实现)
 hl.bind(mainMod .. " + SHIFT + Return", hl.dsp.exec_cmd(scriptsDir .. "/Dropterminal.sh " .. term)) -- Dropdown terminal
 
 -- Desktop zooming or magnifier
-hl.bind(mainMod .. " + ALT + mouse_down", hl.dsp.exec_cmd([[hyprctl keyword cursor:zoom_factor "$(hyprctl getoption cursor:zoom_factor | awk 'NR==1 {factor = $2; if (factor < 1) {factor = 1}; print factor * 2.0}')"]]))
-hl.bind(mainMod .. " + ALT + mouse_up", hl.dsp.exec_cmd([[hyprctl keyword cursor:zoom_factor "$(hyprctl getoption cursor:zoom_factor | awk 'NR==1 {factor = $2; if (factor < 1) {factor = 1}; print factor / 2.0}')"]]))
+hl.bind(mainMod .. " + ALT + mouse_down", hl.dsp.exec_cmd(scriptsDir .. "/CursorZoom.sh up"))
+hl.bind(mainMod .. " + ALT + mouse_up", hl.dsp.exec_cmd(scriptsDir .. "/CursorZoom.sh down"))
 
 -- ## NOTES for ja (Hyprland version 0.39 (Ubuntu 24.04))
 -- hl.bind(mainMod .. " + ALT + mouse_down", hl.dsp.exec_cmd([[hyprctl keyword misc:cursor_zoom_factor "$(hyprctl getoption misc:cursor_zoom_factor | awk 'NR==1 {factor = $2; if (factor < 1) {factor = 1}; print factor * 2.0}')"]]))

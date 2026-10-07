@@ -65,7 +65,7 @@
       "windowRounding": 18
     },
     "sizes": {
-      "barGapsOut": 4,
+      "barGapsOut": 10,
       "elevationMargin": 10,
       "mediaControlsHeight": 160,
       "mediaControlsWidth": 440,

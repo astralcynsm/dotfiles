@@ -37,7 +37,7 @@
 |---|---|---|
 | MCHOSE G7 鼠标、OpenTabletDriver 虚拟数位板 ×2（**硬编码 `output = "HDMI-A-1"`**）、Wacom 笔 的设备规则 | `configs/.config/hypr/UserConfigs/UserSettings.lua` 149–169 行（**通用层**） | 工作机没有这些设备 → `hl.device` 对不存在的设备名是 no-op，**无害**。洁癖做法是把它们搬去 machine 层，但那要动主力机活配置 + 重导出 —— 值不值等 P3 后用户拍板 |
 | 触摸板 input 参数（`touchpad`/`touchdevice`/`tablet` 段） | 同上 57–75 行 | 同上：无触摸板 = no-op |
-| `TouchPad.sh`、`BrightnessKbd.sh` 脚本本体 | `configs/.config/hypr/scripts/`（通用层） | 它们的**绑定**在 `Laptops.lua`（机器层）→ 工作机不会调用。P3.5 顺手把它们内部的 `hyprctl keyword` 修掉即可（R7） |
+| `TouchPad.sh`、`BrightnessKbd.sh` 脚本本体 | `configs/.config/hypr/scripts/`（通用层） | 它们的**绑定**在 `Laptops.lua`（机器层）→ 工作机不会调用。`TouchPad.sh` 的旧式调用已在源机修掉（`hl.device` + 真设备名动态探测，2026-10-08，R7）；工作机无触摸板时脚本会弹「未找到设备」并退出 |
 | `WorkSpaceRules.lua` | `configs/.config/hypr/UserConfigs/` | **孤儿文件**：全树没有任何 `require` 指向它（hyprland.lua 里的引用是注释）。无害，留档——别被它误导 |
 | 合盖 switch 那 4 行 | `Laptops.lua` 40–53 行 | 已全部是注释 |
 

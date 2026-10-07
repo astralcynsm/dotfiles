@@ -19,8 +19,8 @@ require("colors")
 hl.config({
     general = {
         border_size = 2,
-        gaps_in = 2,
-        gaps_out = 4,
+        gaps_in = 8,
+        gaps_out = 10,
         -- col 由 colors.lua 设置，此处不再重复定义以免覆盖
     },
 })

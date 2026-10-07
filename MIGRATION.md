@@ -28,7 +28,7 @@
 | **P1** | 工作机摸底（**纯只读**） | 无 | ⬜ |
 | **P2** | 仓库落地 + 包基座（含 NVIDIA） | 低 | ⬜ |
 | **P3** | Hyprland 最小可跑 | 中 | ⬜ |
-| **P3.5** | `hyprctl` 字符串形式现代化（**29 处 dispatch + 21 处 keyword**） | 低 | ⬜ |
+| **P3.5** | `hyprctl` 字符串形式现代化（50 处）| 低 | ✅ 完成（源机 2026-10-08；工作机只做验证）|
 | **P4** | ii / quickshell 起来 | 中 | ⬜ |
 | **P5** | 主题链打通 | 低 | ⬜ |
 | **P6** | ghostty 配色接入 | 低 | ⬜ |
@@ -251,8 +251,9 @@ hyprctl version | head -1                          # >= 0.56.0
 hyprctl configerrors                               # 必须为空
 hyprctl monitors -j | jq -r '.[].name'             # 应为本机真实输出名
 hyprctl binds -j | jq 'length'                     # 工作机预期 ≈186（源机 203 − Laptops 的 17）
-# ⚠ 注册数 ≠ 可用数：另有 50 处「注册了但静默失效」的调用在等着 P3.5
-#   （29 dispatch + 21 keyword，见 docs/known-issues.md R7）
+# ⚠ 注册数 ≠ 可用数：曾有 50 处「注册了但静默失效」的调用（29 dispatch + 21 keyword）
+#   已于 2026-10-08 在源机全量修复（见 docs/known-issues.md R7）；
+#   configs/ 里都是修复版，本机走 P3.5 的「工作机验证清单」实测即可
 ```
 
 ★ **必测四条**（针对 P3.5 的已知伤）：
@@ -281,7 +282,12 @@ hyprctl keyword __nope__ 1; echo "exit=$?"   # 期望：打印 "Use eval." 但 e
 
 ---
 
-## P3.5 —— `hyprctl` 字符串形式现代化（29 处 dispatch + 21 处 keyword）
+## P3.5 —— `hyprctl` 字符串形式现代化（29 处 dispatch + 21 处 keyword）✅ 源机已完成（2026-10-08）
+
+> **工作机侧先读这条**：这批修复**已在源机的活配置上做完并回灌进本仓库**
+> （`configs/` 里相关文件都是修复版，源机逐脚本实测通过）。
+> 因此工作机的 P3.5 **不是重做修复，而是验证**：部署后按下一节
+> 「工作机验证清单」逐键实测即可。下面原步骤与映射表保留作**排查参考与修复记录**。
 
 **为什么单独一个阶段**：删掉旧写法不难，难的是**确认改写后行为一致**。
 混在 P3 里会让"Hyprland 起不来"和"某个键位坏了"两种故障混在一起，无法二分。
@@ -299,21 +305,43 @@ hyprctl keyword __nope__ 1; echo "exit=$?"   # 期望：打印 "Use eval." 但 e
 > `~/.config/hypr/scripts/Dropterminal.sh`。**不是**仓库根那两个同名目录
 > （仓库的 `scripts/` 是部署/体检工具，`configs/` 是通用层素材，别混）。
 
-- [ ] 3.5.1 打开 `docs/known-issues.md` R7 的清单表逐条勾（它是权威账目）
-- [ ] 3.5.2 改写 `hypridle.conf` 的 3 处（**最要紧**：屏幕永不关 + 唤醒后不亮）
-- [ ] 3.5.3 改写 `hypr/configs/Keybinds.lua` 的 2 处 —— ⚠ 都嵌在
-      `hl.dsp.exec_cmd("hyprctl dispatch …")` 里（壳套壳，双重报废）：
-      L20 `exit 0` → 直接换 `hl.dsp.exit()`；L40 `splitratio 0.3` → **API 无对应**，见下
-- [ ] 3.5.4 改写 `UserKeybinds.lua` 的 1 处（L65，同样嵌在 exec_cmd 里：
-      `workspaceopt allfloat` → **API 无对应**，见下）
-- [ ] 3.5.5 改写 `scripts/Dropterminal.sh` 的 18 处（下拉终端整条链路）
-- [ ] 3.5.6 改写 `Tak0-Autodispatch.sh` 的 4 处（`scripts/` 与 `UserScripts/` 各有一份拷贝）
-- [ ] 3.5.7 改写 5 个脚本里的 21 处 `keyword`：`ChangeLayout.sh` 12、
-      `ChangeBlur.sh` 4、`UserKeybinds.lua` 2（SUPER+ALT+滚轮缩放）、
-      `TouchPad.sh` 2（笔记本功能，工作机最后顺手处理）、`GameMode.sh` 1
-- [ ] 3.5.8 `.zshrc:86` 的 `hrun` 别名（`hyprctl dispatch exec`）→ 改成函数
-      `hrun() { hyprctl dispatch "hl.dsp.exec_cmd('$*')"; }`，或删掉
-- [ ] 3.5.9 **逐一实测**，不批量 sed
+（源机修复动作，已全部完成 2026-10-08 —— 保留作修复记录）
+
+- [x] 3.5.1 对照 R7 清单表逐条修（Dropterminal 18 / hypridle 3 / GameMode 1 / ChangeBlur 4 / ChangeLayout 12）
+- [x] 3.5.2 `hypridle.conf` 3 处 → `hl.dsp.dpms("on"|"off")`（服务已重启验证）
+- [x] 3.5.3 `Keybinds.lua` 2 处 → `hl.dsp.exit()` / `hl.dsp.layout("splitratio 0.3")`
+- [x] 3.5.4 `UserKeybinds.lua` L65 → 新脚本 `scripts/AllFloat.sh`
+      （allfloat 上游已删；脚本用 float dispatcher 实现，任何布局下有效）
+- [x] 3.5.5 `Dropterminal.sh` 18 处（含 special 工作区静默进出：move + 同帧 toggle_special）
+- [x] 3.5.6 `Tak0-Autodispatch.sh` —— **判定为孤儿死代码（无任何调用方），不修**
+- [x] 3.5.7 21 处 keyword：ChangeLayout 12（含 runtime bind/unbind）/ ChangeBlur 4 /
+      UserKeybinds 2（新脚本 `CursorZoom.sh`）/ TouchPad 2（`hl.device` + 真设备名动态探测）/ GameMode 1
+- [x] 3.5.8 `.zshrc` `hrun` → 函数 `hrun() { hyprctl dispatch "hl.dsp.exec_cmd(\"$*\")"; }`
+- [x] 3.5.9 逐脚本实测（Blur / CursorZoom / hrun / TouchPad 通路已自动验证；
+      Dropterminal / GameMode / hypridle 端到端过；ChangeLayout 与 AllFloat 由使用中按键验收）
+
+### 工作机验证清单（部署修复版后做这个）
+
+> `configs/` 里已是修复版，**不要重做修复**，只验证。
+
+```bash
+# ① 全库扫描：旧形式应为零（Tak0 孤儿与迁移注释除外）
+grep -rnE "hyprctl (dispatch [a-zA-Z]|keyword)" ~/.config/hypr ~/.config/quickshell/ii ~/.zshrc \
+  | grep -vE "\.bak|hyprctl dispatch \"|hyprctl dispatch '|Tak0|# "
+
+# ② 逐键实测（对照 docs/known-issues.md R7 的映射表排查）
+#   SUPER+SHIFT+Return  下拉终端（开 → 关 → 再开，确认进出 scratchpad 无闪现）
+#   SUPER+ALT+O         模糊切换（看通知 + 视觉变化，往返各一次）
+#   SUPER+SHIFT+G       游戏模式（开 → 关；开时 configerrors 仍为空、关后设置全还原）
+#   SUPER+ALT+L         布局切换（dwindle ↔ master；J/K/O 键跟随重绑，reload 后回配置默认）
+#   SUPER+ALT+SPACE     All Float（当前工作区全浮动，再按取消）
+#   SUPER+ALT+滚轮      光标缩放（1 → 2 → 1）
+#   SUPER+M             splitratio（**先开两个窗口**再按，单窗口时报 single node 属正常）
+#   CTRL+ALT+DELETE     退出 Hyprland（重建会话后恢复）
+#   空闲 10.5 分钟      屏幕自动关（hypridle；想快点验证就临时改 timeout）
+#   Fn 触摸板键         触摸板开关（台式机无触摸板则跳过，脚本会弹"未找到设备"）
+#   hrun <命令>         新开一个 shell 测（旧 shell 里的旧 alias 不生效）
+```
 
 ### 已知映射
 

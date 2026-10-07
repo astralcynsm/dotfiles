@@ -70,15 +70,17 @@ fi
 # ── 10.7 / 10.8 失效的旧式 hyprctl 调用（R7；P3.5 的闸门）──────────────────
 # 注释行不数（行内容以 # 或 -- 开头）；.bak 与 *.md 不数；
 # dispatch 的现代形式（参数含 hl.dsp）不算失效，会被过滤掉。
+# Tak0-Autodispatch.sh 是孤儿死代码（无任何调用方，2026-10-08 判定，见 R7），
+# 它的旧式调用有意不修，故在 10.7 里排除。
 dead() { # $1 = dispatch|keyword  $2.. = 额外排除正则（可选）
   local kind="$1"; shift
   { grep -rn "hyprctl $kind" "$CFG" "$HOME/.zshrc" 2>/dev/null || true; } \
     | grep -v '\.bak' | grep -v '\.md:' \
     | grep -vE ':[0-9]+:[[:space:]]*(#|--)' \
-    | { if (($#)); then grep -vE "$@"; else cat; fi; }
+    | { if (($#)); then grep -vE "$(printf '%s\n' "$@" | paste -sd'|')"; else cat; fi; }
 }
 
-DD="$(dead dispatch "dispatch ['\"]?hl\.dsp")"
+DD="$(dead dispatch "dispatch ['\"]?hl\.dsp" 'Tak0')"
 if [[ -z "$DD" ]]; then
   pass 10.7 "没有失效的 dispatch 旧写法"
 else

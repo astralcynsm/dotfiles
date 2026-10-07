@@ -163,9 +163,15 @@ StartLimitBurst=20           # 原 10
 
 ---
 
-## R7 ★ `hyprctl` 的字符串形式在 0.56 全灭（dispatch + keyword）
+## R7 ✅ `hyprctl` 的字符串形式在 0.56 全灭（dispatch + keyword）—— **已在主力机全量修复（2026-10-08）**
 
-**这是全套配置里最大的一批"静默失效"**，工作机必须整批修，否则会以为"键位都迁过去了"
+> **现状**：50 处（29 dispatch + 21 `keyword`）已处理完毕并在主力机逐脚本实测通过
+> —— 其中 46 处改写为 Lua 现代形式；Tak0 孤儿 4 处有意豁免（无任何调用方，见下）。
+> 修复已回灌进本仓库（`configs/` 为修复版）。本条保留作**机制说明与排查参考**；
+> 工作机侧的动作见 `MIGRATION.md` P3.5 的「工作机验证清单」。
+> 修复时的关键定论见下文「2026-10-08 修复时的定论」小节。
+
+**这是全套配置里最大的一批"静默失效"**（修复前的状况），若照搬会以为"键位都迁过去了"
 而实际一堆键按了没反应。
 
 ### 机制与实测原文（2026-10-08 在 0.56.2 上实测）
@@ -192,7 +198,7 @@ keyword can't work with non-legacy parsers. Use eval.
 共同症状：**调用方不查退出码 → "这个键没反应"**。
 （`hl.dsp.*` 形式是好的：`hyprctl dispatch 'hl.dsp.focus({monitor="…"})'` → 语义层正常执行。）
 
-### 活跃调用清单（主力机实测 29 处 dispatch + 21 处 keyword）
+### 修复前清单（29 处 dispatch + 21 处 keyword）—— 现已全部处理 ✅（Tak0 4 处遭豁免）
 
 复现命令：
 
@@ -210,7 +216,7 @@ grep -rn 'hyprctl keyword'  ~/.config/hypr ~/.config/quickshell/ii ~/.zshrc ~/.l
 | `hypr/UserConfigs/UserKeybinds.lua:65` | 1 | dispatch | `SUPER+ALT+SPACE` allfloat |
 | `hypr/configs/Keybinds.lua:20` | 1 | dispatch | `CTRL+ALT+DELETE` 退出 Hyprland |
 | `hypr/configs/Keybinds.lua:40` | 1 | dispatch | `SUPER+M` splitratio |
-| `hypr/scripts/Tak0-Autodispatch.sh` | 2 | dispatch | 自动派窗（`UserScripts/` 下另有一份拷贝同样坏）|
+| `hypr/scripts/Tak0-Autodispatch.sh` | 2 | dispatch | 自动派窗（`UserScripts/` 下另有一份拷贝同样坏）—— **孤儿死代码，无任何调用方，有意豁免不修**（该结论已写进 `scripts/verify/10-hyprland.sh` 的闸门豁免里）|
 | `.zshrc:86` | 1 | dispatch | `hrun` 别名（`hyprctl dispatch exec`）|
 | `hypr/UserConfigs/UserKeybinds.lua:69,70` | 2 | keyword | `SUPER+ALT+滚轮` 光标缩放 |
 | `hypr/scripts/GameMode.sh` | 1 | keyword | `SUPER+SHIFT+G` 动画开关 |
@@ -231,23 +237,33 @@ hyprctl dispatch 'hl.dsp.exec_cmd("foot")'
 hyprctl eval 'hl.config({ decoration = { blur = { size = 6 } } })'
 ```
 
-⚠ 两个**没有现代对应项**的：
+#### 2026-10-08 修复时的定论（修正下面这段的旧说法）
 
-- `workspaceopt allfloat` —— `hl.dsp` 全部子命名空间里都没有（以
-  `/usr/share/hypr/stubs/hl.meta.lua` 为准，这份是官方自动生成的权威 API 面）；
-- `splitratio` —— 同样不存在。
+- **`workspaceopt allfloat`：上游已删除**，不止是没有 API —— 0.56 二进制里连 `allfloat`
+  字符串都不存在（`strings /usr/bin/Hyprland | grep allfloat` 为空），
+  `hl.workspace_rule({ layout_opts = { allfloat = true } })` 实测也无接收方
+  （规则本身生效——ws 的 `tiledLayout` 会变——但 allfloat 选项没人消费）。
+  → 已改为 `scripts/AllFloat.sh`：逐窗口 `hl.dsp.window.float`（**toggle 语义，实测**）
+  实现「当前工作区全浮动」toggle；任何布局下都有效（旧命令只对 master 有效）。
+- **`splitratio`：走 `hl.dsp.layout("splitratio 0.3")`**（layoutmsg 路由给当前布局）。
+  dwindle 下实测被消费（对着单节点报 `cannot alter split ratio on no / single node`
+  —— 这个 warning 就是消息送达的证据）；master 侧未单独实测，按到再说。
+- **`hl.unbind("SUPER + J")` 运行时可用**，已实测：`hyprctl eval` 里 bind → `hyprctl binds -j`
+  可见 → unbind → 消失。ChangeLayout.sh 已按此重写。
+- 相关顺带发现：**runtime 加的 bind / workspace_rule 都不跨 `hyprctl reload` 存活**
+  （与旧的 keyword bind 行为一致）；
+  `hl.device()` 运行时可用；**`hyprctl reload` 不会重跑 `hl.on("hyprland.start")` 里的启动命令**
+  （所以 GameMode.sh 退出分支的 reload 是安全的）；
+  `getoption` 文本格式变化只影响比较逻辑（`bool: true` vs 旧 `int: 1`），
+  `getoption -j` 的 JSON 路径（`.int`/`.str`）都还在；
+  TouchPad 脚本已改用真设备名动态探测（配置里 `asue1209:...` 是 JaKooLit 默认残留，
+  与本机 Synaptics 触摸板不匹配——Laptops.lua 里那份是死配置）。
 
-这两个只能用 `hyprctl eval` 自己迭代窗口实现（或改成相近的 `hl.dsp.window.float` 语义），
-**别的仓/博客里的 `hl.dsp.split_ratio` 之类名字全是编的**，别信。
-
-`hl.unbind("SUPER + J")` 在桩里存在（ChangeLayout.sh 的 `keyword unbind` 对应它），
-但**运行时行为未实测** —— 改 ChangeLayout 时先在一个废弃键位上验证，别拿真键试。
-
-### 对迁移的含义（重要）
+### 对迁移的含义（修复后更新）
 
 「键位一个不能丢」不能只数 `hyprctl binds -j | jq length`（注册 ≠ 能用）。
-工作机 P3 装完、P7 收尾时，**必须把上面这张表逐条修掉并实测按键**，
-否则迁过去的是一批"看着在、按了没反应"的键。
+修复已完成，工作机侧的动作变成：**部署修复版后按 `MIGRATION.md` P3.5 的验证清单逐键实测**，
+发现差异再回查本条的映射表。
 `hyprland.lua` 顶部已有一条警告注释，可以对照。
 
 ---
