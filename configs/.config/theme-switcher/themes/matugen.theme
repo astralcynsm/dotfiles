@@ -1,0 +1,5 @@
+# Material You —— 跟随壁纸自动配色
+# 壁纸是这套主题的「输入」：换壁纸后重新应用本主题，整套配色会跟着变
+THEME_DESC="Material You（跟随壁纸自动配色）"
+THEME_TYPE="matugen"
+THEME_MATUGEN_MODE="dark"

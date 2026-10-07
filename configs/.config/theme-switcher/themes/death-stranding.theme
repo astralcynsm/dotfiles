@@ -1,0 +1,7 @@
+# Death Stranding —— 固定配色，与壁纸无关
+# 近纯黑底 + 琥珀橙主色 + 青对比色，配合 appearance-presets/death-stranding.json
+# （preset 管圆角/动画/字距，主题管配色 —— 两边要一起用才是完整的 DS 观感）
+THEME_DESC="Death Stranding（固定配色）"
+THEME_TYPE="static"
+THEME_ASSETS="death-stranding"
+THEME_MODE="dark"

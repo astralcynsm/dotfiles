@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# ii 的「在终端里跑命令」适配层
+#
+# 为什么需要它：
+#   ii 的调用点把命令拼成 `${apps.terminal} -e '<整条命令>'`
+#   （见 quickshell/ii/services/LauncherSearch.qml:255 与 :271）。
+#   但 foot 的 -e 是为了兼容 xterm 而**被忽略**的，foot --help 原文：
+#       -e    ignored (for compatibility with xterm -e)
+#   于是真正被执行的只有它后面那一个 argv —— 整条命令被当成
+#   一个可执行文件名，结果必然是 "failed to execute: No such file or directory"。
+#   （kitty 的 -e 也不解析引号，所以上游这套拼法本来就只对无参命令有效。）
+#
+#   本脚本把已知的几种形态翻译成 foot 能跑的：
+#
+#       term-exec                    → foot
+#       term-exec -e '<整条命令>'     → foot sh -c '<整条命令>'
+#       term-exec <其它...>           → foot <其它...>（原样透传）
+#
+# 换终端只改下面这一行（前提是新终端也认 -e，或者把它一起改了）。
+
+EXEC=foot
+
+set -u
+
+if [ "${1:-}" = "-e" ]; then
+    shift
+    [ "$#" -eq 0 ] && exec "$EXEC"
+    exec "$EXEC" sh -c "$*"
+fi
+
+exec "$EXEC" "$@"

@@ -1,0 +1,759 @@
+#!/usr/bin/env python3
+"""ii-stats-daemon —— 给 quickshell 侧栏采集系统指标与打字明细（本地新增，非上游）。
+
+产出（都在 ~/.local/share/ii-stats/）：
+
+  system_summary.json      给 QML 读的「当前 + 今日曲线」，每 10 秒原子重写
+  metrics-YYYY-MM-DD.jsonl 原始采样，按天分文件，保留 30 天
+  typing_details.json      从 rime 的 words_input.csv 增量解析出来的打字明细
+  typing_state.json        解析游标 + 累计计数（重启不用重扫 39MB）
+
+设计要点：
+  * 只依赖 Python 3 标准库；单实例靠 flock
+  * 快慢分开：CPU/内存/温度/电池/磁盘每 10 秒，GPU(nvidia-smi) 每 30 秒
+    —— nvidia-smi 每次 100~300ms，不塞进 10 秒那条路
+  * 今日曲线在内存里按 200 个等宽时段累积（平均 + 峰值），重启时从当天的
+    jsonl 重建 —— summary 大小恒定，跟跑了多久无关
+  * CSV 游标按**字节**记，且只吃以换行结尾的完整行 —— 正在写的那一行下次再说
+  * 所有 JSON 都是「写临时文件 + os.replace」，读端见不到半截文件
+
+用法：
+  ii-stats-daemon              常驻（systemd 里跑的就是它）
+  ii-stats-daemon --once       采一次、写一次就退出（调试）
+  ii-stats-daemon --rescan     丢掉游标，从 CSV 头重扫一遍
+  ii-stats-daemon --status     打印状态概览后退出
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import fcntl
+import io
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+
+# ── 常量 ────────────────────────────────────────────────────────────────────
+HOME = Path.home()
+DATA_DIR = HOME / ".local/share/ii-stats"
+SUMMARY_PATH = DATA_DIR / "system_summary.json"
+TYPING_PATH = DATA_DIR / "typing_details.json"
+TYPING_STATE_PATH = DATA_DIR / "typing_state.json"
+METRICS_PREFIX = "metrics-"
+CSV_PATH = HOME / ".local/share/fcitx5/rime/py_wordscounter/words_input.csv"
+LOCK_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "ii-stats.lock"
+
+SAMPLE_INTERVAL = 10        # 秒：CPU/内存/温度/电池/磁盘
+GPU_EVERY = 3               # 每 3 个周期调一次 nvidia-smi（= 30 秒）
+CSV_EVERY = 30              # 每 30 个周期解析一次 CSV（= 5 分钟）
+BUCKETS = 200               # 今日曲线降采样后的点数（432 秒一段）
+KEEP_DAYS = 30              # jsonl 保留天数
+HISTORY_TTL = 3600          # 历史统计缓存多久重算一次（不缓存的话每 10 秒要读 30 个文件）
+SESSION_GAP = 300           # 秒：超过这个空档算「新的一段」
+BURST_GAP = 90              # 秒：连打里允许的最大空档
+TOP_WORDS = 300             # 状态里保留多少高频词/拼音
+LOG_PREFIX = "[ii-stats]"
+
+
+def log(*args):
+    print(LOG_PREFIX, *args, flush=True)
+
+
+def now() -> float:
+    return time.time()
+
+
+def day_key(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+
+def atomic_write_json(path: Path, obj) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def read_json(path: Path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def metrics_path(day: str) -> Path:
+    return DATA_DIR / f"{METRICS_PREFIX}{day}.jsonl"
+
+
+def read_int(path: Path):
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+class Hwmon:
+    """按名字找 /sys/class/hwmon 下的传感器。
+
+    hwmon 编号重启会变，所以按 name 找；同名可能有多个（这台机有两个 nvme、
+    两个 spd5118），所以一个名字对应一串路径。路径在启动时解析一次就够。
+    """
+
+    def __init__(self) -> None:
+        self.by_name: dict[str, list[Path]] = {}
+        for entry in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+            try:
+                name = (entry / "name").read_text().strip()
+            except OSError:
+                continue
+            self.by_name.setdefault(name, []).append(entry)
+
+    def paths(self, name: str) -> list[Path]:
+        return self.by_name.get(name, [])
+
+    def temp(self, name: str, attr: str = "temp1_input"):
+        """同名传感器取最大值（两个 nvme 只关心最热的那个）"""
+        values = [read_int(p) for hw in self.paths(name) for p in [hw / attr]]
+        values = [v for v in values if v is not None]
+        return round(max(values) / 1000, 1) if values else None
+
+    def max_temp(self, name: str):
+        values = []
+        for hw in self.paths(name):
+            values += [v for v in (read_int(p) for p in hw.glob("temp*_input")) if v is not None]
+        return round(max(values) / 1000, 1) if values else None
+
+    def fans(self) -> list[int]:
+        out = []
+        for hw in self.paths("hp"):
+            out += [v for v in (read_int(p) for p in sorted(hw.glob("fan*_input"))) if v is not None]
+        return out
+
+
+# ── 采样 ────────────────────────────────────────────────────────────────────
+class Sampler:
+    def __init__(self) -> None:
+        self.prev_cpu: tuple[int, int] | None = None   # (busy, total)
+        self.hwmon = Hwmon()
+        self.gpu_cache: dict = {}
+        self.gpu_procs: list[dict] = []
+
+    def cpu_percent(self):
+        """ /proc/stat 差值。第一个周期没有差值，返回 None（别报 0 骗人）"""
+        try:
+            fields = Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
+        except OSError:
+            return None
+        values = [int(v) for v in fields[:8]]
+        idle = values[3] + values[4]                              # idle + iowait
+        total = sum(values)
+        if self.prev_cpu is None:
+            self.prev_cpu = (total - idle, total)
+            return None
+        pbusy, ptotal = self.prev_cpu
+        self.prev_cpu = (total - idle, total)
+        dt = total - ptotal
+        if dt <= 0:
+            return None
+        return round(max(0.0, min(100.0, (total - idle - pbusy) / dt * 100)), 1)
+
+    def memory(self) -> dict:
+        info = {}
+        try:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                key, _, rest = line.partition(":")
+                parts = rest.split()
+                info[key] = int(parts[0]) if parts else 0
+        except OSError:
+            return {}
+        total = info.get("MemTotal", 0)
+        avail = info.get("MemAvailable", 0)
+        stotal = info.get("SwapTotal", 0)
+        sfree = info.get("SwapFree", 0)
+        return {
+            "percent": round((total - avail) / total * 100, 1) if total else None,
+            "used_gb": round((total - avail) / 1048576, 2),
+            "total_gb": round(total / 1048576, 2),
+            "swap_percent": round((stotal - sfree) / stotal * 100, 1) if stotal else 0.0,
+            "swap_used_gb": round((stotal - sfree) / 1048576, 2),
+            "swap_total_gb": round(stotal / 1048576, 2),
+        }
+
+    def temperatures(self) -> dict:
+        out = {}
+        cpu = self.hwmon.temp("coretemp")          # Package id 0
+        if cpu is not None:
+            out["cpu"] = cpu
+        cores = self.hwmon.max_temp("coretemp")
+        if cores is not None:
+            out["cpu_core_max"] = cores
+        for name, key in (("nvme", "nvme"), ("iwlwifi_1", "wifi"), ("spd5118", "ram")):
+            value = self.hwmon.temp(name)
+            if value is not None:
+                out[key] = value
+        return out
+
+    def battery(self) -> dict:
+        base = Path("/sys/class/power_supply")
+
+        def val(name, attr):
+            try:
+                return (base / name / attr).read_text().strip()
+            except OSError:
+                return None
+
+        status = val("BAT1", "status") or ""
+        out: dict = {
+            "percent": int(val("BAT1", "capacity") or 0),
+            "status": status,
+            "ac": (val("ACAD", "online") or "0") == "1",
+        }
+        energy_now = val("BAT1", "energy_now")
+        energy_full = val("BAT1", "energy_full")
+        energy_design = val("BAT1", "energy_full_design")
+        power_now = val("BAT1", "power_now")
+        if energy_now and energy_full:
+            out["wh_now"] = round(int(energy_now) / 1e6, 2)
+            out["wh_full"] = round(int(energy_full) / 1e6, 2)
+            if energy_design and int(energy_design) > 0:
+                out["health_percent"] = round(int(energy_full) / int(energy_design) * 100, 1)
+        if power_now:
+            watts = round(int(power_now) / 1e6, 2)
+            out["power_w"] = watts
+            if status == "Discharging" and watts > 0.1 and energy_now:
+                out["minutes_left"] = int(int(energy_now) / 1e6 / watts * 60)
+        return out
+
+    def disk(self) -> dict:
+        try:
+            usage = shutil.disk_usage("/")
+        except OSError:
+            return {}
+        return {
+            "used_gb": round(usage.used / 1e9, 1),
+            "total_gb": round(usage.total / 1e9, 1),
+            "free_gb": round(usage.free / 1e9, 1),
+            "percent": round(usage.used / usage.total * 100, 1),
+        }
+
+    def load(self) -> dict:
+        try:
+            one, five, fifteen = os.getloadavg()
+        except OSError:
+            return {}
+        try:
+            uptime = float(Path("/proc/uptime").read_text().split()[0])
+        except OSError:
+            uptime = 0.0
+        return {"load1": round(one, 2), "load5": round(five, 2), "load15": round(fifteen, 2),
+                "uptime_hours": round(uptime / 3600, 1)}
+
+    @staticmethod
+    def _num(text):
+        try:
+            return float(text.strip())
+        except ValueError:
+            return None
+
+    def gpu(self) -> dict:
+        try:
+            out = subprocess.run(
+                ["nvidia-smi",
+                 "--query-gpu=utilization.gpu,memory.used,memory.total,"
+                 "temperature.gpu,power.draw,clocks.sm",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        if not out:
+            return {}
+        parts = [p.strip() for p in out.splitlines()[0].split(",")]
+        if len(parts) < 6:
+            return {}
+        return {"util": self._num(parts[0]), "mem_used_mb": self._num(parts[1]),
+                "mem_total_mb": self._num(parts[2]), "temp": self._num(parts[3]),
+                "power_w": self._num(parts[4]), "clock_mhz": self._num(parts[5])}
+
+    def gpu_processes(self) -> list[dict]:
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return []
+        agg: dict[str, int] = {}
+        for line in out.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            tokens = parts[1].split()
+            # process_name 里带着整条命令行（浏览器 GPU 进程尤其长），只留可执行名
+            name = os.path.basename(tokens[0]) if tokens else parts[1]
+            mem = self._num(parts[2])
+            if mem is None:
+                continue
+            agg[name] = agg.get(name, 0) + int(mem)
+        return [{"name": k, "mem_mb": v} for k, v in sorted(agg.items(), key=lambda kv: -kv[1])[:5]]
+
+    def sample(self, with_gpu: bool) -> dict:
+        s: dict = {"t": int(now())}
+        cpu = self.cpu_percent()
+        if cpu is not None:
+            s["cpu"] = cpu
+        s["mem"] = self.memory()
+        s["temps"] = self.temperatures()
+        s["fans"] = self.hwmon.fans()
+        s["bat"] = self.battery()
+        s["disk"] = self.disk()
+        s["load"] = self.load()
+        if with_gpu:
+            fresh = self.gpu()
+            if fresh:
+                self.gpu_cache = fresh
+            self.gpu_procs = self.gpu_processes()
+        if self.gpu_cache:
+            s["gpu"] = self.gpu_cache
+        return s
+
+
+# ── 今日曲线 ────────────────────────────────────────────────────────────────
+class TodayCurve:
+    """一天切成 BUCKETS 段，每段累积平均与峰值 —— 内存恒定、summary 大小恒定。"""
+
+    METRICS = ("cpu", "mem", "cpu_temp", "gpu_temp", "gpu_power")
+
+    def __init__(self, day: str | None = None) -> None:
+        self.day = day or day_key(now())
+        self.sum = {m: [0.0] * BUCKETS for m in self.METRICS}
+        self.cnt = {m: [0] * BUCKETS for m in self.METRICS}
+        self.peak = {m: [None] * BUCKETS for m in self.METRICS}
+
+    @staticmethod
+    def bucket_of(ts: float) -> int:
+        lt = time.localtime(ts)
+        seconds_of_day = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec
+        return min(BUCKETS - 1, seconds_of_day * BUCKETS // 86400)
+
+    @staticmethod
+    def extract(s: dict) -> dict:
+        gpu = s.get("gpu") or {}
+        temps = s.get("temps") or {}
+        return {"cpu": s.get("cpu"), "mem": (s.get("mem") or {}).get("percent"),
+                "cpu_temp": temps.get("cpu"), "gpu_temp": gpu.get("temp"),
+                "gpu_power": gpu.get("power_w")}
+
+    def add(self, s: dict) -> None:
+        day = day_key(s["t"])
+        if day != self.day:
+            self.reset(day)
+        idx = self.bucket_of(s["t"])
+        for name, value in self.extract(s).items():
+            if value is None:
+                continue
+            self.sum[name][idx] += float(value)
+            self.cnt[name][idx] += 1
+            if self.peak[name][idx] is None or value > self.peak[name][idx]:
+                self.peak[name][idx] = float(value)
+
+    def reset(self, day: str) -> None:
+        self.__init__(day)
+
+    def rebuild_from_jsonl(self) -> int:
+        """重启后从当天的 jsonl 恢复，否则曲线从启动那一刻才开始"""
+        path = metrics_path(self.day)
+        count = 0
+        if not path.exists():
+            return 0
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        self.add(json.loads(line))
+                        count += 1
+                    except ValueError:
+                        continue
+        except OSError:
+            return count
+        return count
+
+    def report(self) -> dict:
+        out = {}
+        for name in self.METRICS:
+            samples = sum(self.cnt[name])
+            peak = [p for p in self.peak[name] if p is not None]
+            out[name] = {
+                "avg": round(sum(self.sum[name]) / samples, 1) if samples else None,
+                "max": round(max(peak), 1) if peak else None,
+                "samples": samples,
+                # 空桶给 null：采集端不编值，怎么连是界面的事
+                "curve": [round(self.sum[name][i] / self.cnt[name][i], 1) if self.cnt[name][i] else None
+                          for i in range(BUCKETS)],
+            }
+        return out
+
+
+# ── 打字明细 ────────────────────────────────────────────────────────────────
+class TypingParser:
+    """words_input.csv 是 append-only 的 6 列 CSV：
+
+        epoch, "YYYY-MM-DD HH:MM:SS", 引擎, 拼音, 汉字, 字数
+
+    引号里可能有逗号，所以走 csv 模块；游标按字节记，只吃完整行。
+    """
+
+    def __init__(self, state: dict) -> None:
+        self.offset: int = int(state.get("csv_offset") or 0)
+        self.rows: int = int(state.get("rows") or 0)
+        self.chars: int = int(state.get("chars") or 0)
+        self.by_hour: list = state.get("by_hour") or [0] * 24
+        self.by_weekday: list = state.get("by_weekday") or [0] * 7
+        self.words: Counter = Counter(state.get("words") or {})
+        self.pinyins: Counter = Counter(state.get("pinyins") or {})
+        self.days: dict = state.get("days") or {}
+        # 今日增量状态（持久化，重启不丢；不然「今天每小时的输入」会从头开始算）
+        self.today_date: str = state.get("today_date") or day_key(now())
+        self.today_chars: int = int(state.get("today_chars") or 0)
+        self.today_entries: int = int(state.get("today_entries") or 0)
+        self.today_by_hour: list = state.get("today_by_hour") or [0] * 24
+        self.today_sessions: int = int(state.get("today_sessions") or 0)
+        self.last_ts: float | None = state.get("last_ts")
+        self.burst_start: float | None = state.get("burst_start")
+        self.burst_best: float = float(state.get("burst_best") or 0.0)
+
+    def state(self) -> dict:
+        return {
+            "csv_offset": self.offset,
+            "rows": self.rows,
+            "chars": self.chars,
+            "by_hour": self.by_hour,
+            "by_weekday": self.by_weekday,
+            "words": dict(self.words.most_common(TOP_WORDS)),
+            "pinyins": dict(self.pinyins.most_common(TOP_WORDS)),
+            "days": dict(sorted(self.days.items())[-400:]),
+            "today_date": self.today_date,
+            "today_chars": self.today_chars,
+            "today_entries": self.today_entries,
+            "today_by_hour": self.today_by_hour,
+            "today_sessions": self.today_sessions,
+            "last_ts": self.last_ts,
+            "burst_start": self.burst_start,
+            "burst_best": round(self.burst_best, 1),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    @staticmethod
+    def parse_time(text: str):
+        """历史上有过两种分隔符：'2025-09-27·00:09:54' 和 '2025-09-27 00:09:54'"""
+        text = text.strip().replace("·", " ")
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def rescan(self) -> None:
+        self.offset = 0
+        self.rows = self.chars = self.today_chars = self.today_entries = 0
+        self.by_hour = [0] * 24
+        self.by_weekday = [0] * 7
+        self.today_by_hour = [0] * 24
+        self.words = Counter()
+        self.pinyins = Counter()
+        self.days = {}
+        self.today_sessions = 0
+        self.last_ts = None
+        self.burst_start = None
+        self.burst_best = 0.0
+        self.today_date = day_key(now())
+
+    def _roll_day_if_needed(self, day: str) -> None:
+        if day == self.today_date:
+            return
+        self.today_date = day
+        self.today_chars = self.today_entries = self.today_sessions = 0
+        self.today_by_hour = [0] * 24
+        self.last_ts = None
+        self.burst_start = None
+        self.burst_best = 0.0
+
+    def update(self) -> dict:
+        if not CSV_PATH.exists():
+            return {"ok": False, "reason": "csv-missing"}
+        size = CSV_PATH.stat().st_size
+        if size < self.offset:                          # 文件被重写过
+            log("CSV 变小（%d → %d 字节），从头重扫" % (self.offset, size))
+            self.rescan()
+        if size == self.offset:
+            return {"ok": True, "new_rows": 0, "rows": self.rows, "chars": self.chars}
+
+        with open(CSV_PATH, "rb") as f:
+            f.seek(self.offset)
+            chunk = f.read()
+        cut = chunk.rfind(b"\n") + 1
+        if cut <= 0:                                    # 连一行完整的都还没有
+            return {"ok": True, "new_rows": 0, "rows": self.rows, "chars": self.chars}
+        complete, rest = chunk[:cut], chunk[cut:]
+        self.offset += len(complete)
+        new_rows = 0
+        for row in csv.reader(io.StringIO(complete.decode("utf-8", "replace"))):
+            if len(row) < 6:
+                continue
+            when = self.parse_time(row[1])
+            if when is None:
+                continue
+            try:
+                count = int(row[5])
+            except ValueError:
+                continue
+            epoch = when.timestamp()
+            self.by_hour[when.hour] += count
+            self.by_weekday[when.weekday()] += count
+            word, pinyin = row[4].strip(), row[3].strip()
+            if word:
+                self.words[word] += count
+            if pinyin:
+                self.pinyins[pinyin] += count
+            day = when.strftime("%Y-%m-%d")
+            self.days[day] = self.days.get(day, 0) + count
+            self.chars += count
+            self.rows += 1
+            new_rows += 1
+            if day != self.today_date:
+                self._roll_day_if_needed(day)
+            self.today_chars += count
+            self.today_entries += 1
+            self.today_by_hour[when.hour] += count
+            # 段数与连打：空档 > SESSION_GAP 算新的一段，> BURST_GAP 断开连打
+            if self.last_ts is not None:
+                gap = epoch - self.last_ts
+                if gap > SESSION_GAP:
+                    self.today_sessions += 1
+                if gap > BURST_GAP and self.burst_start is not None:
+                    self.burst_best = max(self.burst_best, self.last_ts - self.burst_start)
+                    self.burst_start = epoch
+            elif self.burst_start is None:
+                self.burst_start = epoch
+            self.last_ts = epoch
+        return {"ok": True, "new_rows": new_rows, "rows": self.rows, "chars": self.chars,
+                "leftover_bytes": len(rest), "offset": self.offset}
+
+    def report(self) -> dict:
+        today = self.today_date
+        longest = self.burst_best
+        if self.last_ts is not None and self.burst_start is not None:
+            longest = max(longest, self.last_ts - self.burst_start)
+        peak_hour = max(range(24), key=lambda h: self.today_by_hour[h]) if self.today_entries else None
+        return {
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": self.rows,
+            "chars": self.chars,
+            "csv_offset": self.offset,
+            "all": {
+                "by_hour": self.by_hour,
+                "by_weekday": self.by_weekday,
+                "words": [{"w": w, "n": n} for w, n in self.words.most_common(TOP_WORDS)],
+                "pinyins": [{"w": w, "n": n} for w, n in self.pinyins.most_common(TOP_WORDS)],
+                "days": self.days,
+            },
+            "today": {
+                "date": today,
+                "chars": self.today_chars,
+                "entries": self.today_entries,
+                "by_hour": self.today_by_hour,
+                "peak_hour": peak_hour,
+                "sessions": self.today_sessions + (1 if self.today_entries else 0),
+                "longest_burst_min": round(longest / 60, 1),
+            },
+        }
+
+
+# ── 历史统计（缓存，别每 10 秒读 30 个 jsonl）────────────────────────────────
+class HistoryStats:
+    def __init__(self) -> None:
+        self.built_at = 0.0
+        self.day = ""
+        self.items: list[dict] = []
+
+    def refresh(self, force: bool = False) -> list[dict]:
+        today = day_key(now())
+        if not force and self.items and today == self.day and now() - self.built_at < HISTORY_TTL:
+            return self.items
+        items = []
+        for i in range(1, KEEP_DAYS + 1):
+            day = day_key(now() - i * 86400)
+            path = metrics_path(day)
+            if not path.exists():
+                continue
+            cpu, gpu, count = [], [], 0
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            s = json.loads(line)
+                        except ValueError:
+                            continue
+                        count += 1
+                        if s.get("cpu") is not None:
+                            cpu.append(s["cpu"])
+                        temp = (s.get("gpu") or {}).get("temp")
+                        if temp is not None:
+                            gpu.append(temp)
+            except OSError:
+                continue
+            items.append({
+                "date": day, "samples": count,
+                "cpu_avg": round(sum(cpu) / len(cpu), 1) if cpu else None,
+                "cpu_max": round(max(cpu), 1) if cpu else None,
+                "gpu_temp_max": round(max(gpu), 1) if gpu else None,
+            })
+        self.items, self.built_at, self.day = items, now(), today
+        return items
+
+
+def rotate_metrics() -> int:
+    cutoff = now() - KEEP_DAYS * 86400
+    removed = 0
+    for path in DATA_DIR.glob(f"{METRICS_PREFIX}*.jsonl"):
+        try:
+            day = path.stem[len(METRICS_PREFIX):]
+            if datetime.strptime(day, "%Y-%m-%d").timestamp() < cutoff:
+                path.unlink()
+                removed += 1
+        except (ValueError, OSError):
+            continue
+    return removed
+
+
+def build_summary(curve: TodayCurve, last: dict, history: list[dict]) -> dict:
+    return {
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "current": last,
+        "today": dict(curve.report(), date=curve.day),
+        "history": history,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="ii 侧栏的系统指标 / 打字明细采集器")
+    parser.add_argument("--once", action="store_true", help="采一次就退出（调试）")
+    parser.add_argument("--rescan", action="store_true", help="丢掉游标，从 CSV 头重扫")
+    parser.add_argument("--status", action="store_true", help="打印状态后退出")
+    args = parser.parse_args()
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.status:
+        summary = read_json(SUMMARY_PATH, {}) or {}
+        typing = read_json(TYPING_PATH, {}) or {}
+        print(json.dumps({
+            "csv": {"path": str(CSV_PATH), "exists": CSV_PATH.exists()},
+            "daemon_pid": open(LOCK_PATH).read() if LOCK_PATH.exists() else None,
+            "summary_updated_at": summary.get("updated_at"),
+            "current": summary.get("current", {}).get("load", {}),
+            "typing": {"updated_at": typing.get("updated_at"), "rows": typing.get("rows"),
+                       "today": typing.get("today")},
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    # 单实例：两个实例会互相覆盖 summary、还各写一份 jsonl
+    lock_file = open(LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log("已有实例在跑（%s）" % LOCK_PATH)
+        return 1
+    lock_file.write(str(os.getpid()))
+    lock_file.flush()
+
+    state = {} if args.rescan else (read_json(TYPING_STATE_PATH, {}) or {})
+    if args.rescan:
+        log("--rescan：丢弃游标重扫")
+    typer = TypingParser(state)
+    curve = TodayCurve()
+    rebuilt = curve.rebuild_from_jsonl()
+    log("启动 pid=%d：今日曲线恢复 %d 条采样，CSV 游标 %d 字节" % (os.getpid(), rebuilt, typer.offset))
+
+    sampler = Sampler()
+    history = HistoryStats()
+    stopping = {"flag": False}
+
+    def on_signal(signum, _frame):
+        stopping["flag"] = True
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+    last_sample: dict = {}
+    tick = 0
+    current_day = day_key(now())
+    while True:
+        with_gpu = (tick % GPU_EVERY == 0)
+        sample = sampler.sample(with_gpu)
+        if with_gpu:
+            sample["gpu_procs"] = sampler.gpu_procs
+        last_sample = sample
+        curve.add(sample)
+
+        try:
+            with open(metrics_path(day_key(sample["t"])), "a", encoding="utf-8") as f:
+                f.write(json.dumps(sample, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except OSError as exc:
+            log("写 jsonl 失败：%s" % exc)
+
+        try:
+            atomic_write_json(SUMMARY_PATH, build_summary(curve, last_sample, history.refresh()))
+        except OSError as exc:
+            log("写 summary 失败：%s" % exc)
+
+        if tick % CSV_EVERY == 0:
+            try:
+                info = typer.update()
+                if info.get("ok"):
+                    atomic_write_json(TYPING_PATH, typer.report())
+                    atomic_write_json(TYPING_STATE_PATH, typer.state())
+                    if info.get("new_rows"):
+                        log("CSV 增量 +%d 行（累计 %d 行 / %d 字）"
+                            % (info["new_rows"], info["rows"], info["chars"]))
+            except Exception as exc:                     # 解析挂了也不能中断采样
+                log("解析 CSV 出错：%s" % exc)
+
+        today = day_key(now())
+        if today != current_day:
+            current_day = today
+            log("跨天：切到 %s，清理 %d 个过期 jsonl" % (today, rotate_metrics()))
+            # 跨天时把刚过去那天的历史补上（缓存里还没有今天的完整数据）
+            history.refresh(force=True)
+
+        if args.once:
+            log("--once：已写出 %s" % SUMMARY_PATH)
+            return 0
+
+        slept = 0.0
+        while slept < SAMPLE_INTERVAL and not stopping["flag"]:
+            time.sleep(0.2)
+            slept += 0.2
+        if stopping["flag"]:
+            try:
+                atomic_write_json(SUMMARY_PATH, build_summary(curve, last_sample, history.refresh()))
+                atomic_write_json(TYPING_PATH, typer.report())
+                atomic_write_json(TYPING_STATE_PATH, typer.state())
+            except OSError:
+                pass
+            log("退出")
+            return 0
+        tick += 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

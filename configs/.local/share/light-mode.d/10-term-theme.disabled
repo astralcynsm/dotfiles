@@ -1,0 +1,7 @@
+#!/bin/bash
+cp ~/.config/foot/themes/light.ini ~/.config/foot/current_theme.ini
+ln -sf ~/.config/rio/themes/my-light.toml ~/.config/rio/themes/current.toml
+# cp ~/.config/ghostty/themes/light ~/.config/ghostty/active-theme
+# pkill -USR1 foot  <-- Foot 其实支持自动热重载配置，这行通常不需要
+
+# gsettings set org.gnome.desktop.interface color-scheme 'prefer-light'

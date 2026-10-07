@@ -1,0 +1,20 @@
+[Unit]
+Description=Rescrobbled MPRIS Scrobbler
+Documentation=https://github.com/InputUsername/rescrobbled
+# 确保在用户图形界面加载完后再启动，否则找不到 D-Bus
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# 这里填第一步查到的路径，通常是下面这个：
+ExecStart=/usr/bin/rescrobbled
+# 关键：不延迟输出，方便看日志
+Environment=RUST_LOG=info
+# 挂了自动重启
+Restart=on-failure
+RestartSec=5
+
+[Install]
+# 登录即启动
+WantedBy=default.target

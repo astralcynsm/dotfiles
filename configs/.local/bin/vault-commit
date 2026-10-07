@@ -1,0 +1,468 @@
+#!/usr/bin/env bash
+# vault-commit — Obsidian 库 → GitHub 工作流（提交 + 速记）
+#
+# 供 ii 的 quickshell 弹框和终端共用。所有子命令往 stdout 打**单行 JSON**。
+# 注意：输出 ok:false 时退出码通常是 0（用 jq 判 ok 字段，别判退出码）。
+#
+#   list                     列出配置里的 vault
+#   detect                   识别「当前在哪个库」→ {ok, key, name, label} 或 {ok:false, candidates}
+#   status <key>             未提交变更摘要（会先 add -A，让摘要 == 将提交的内容）
+#   apply <key> <message>    add -A → commit → push；远端有新提交自动 rebase；**没改动时=同步远端**
+#   title-prefix             打印速记标题前缀，如 "July 14th, 2026 - "
+#   capture <key> <text>     在库里新建 <title-prefix><text>.md 并在 Obsidian 打开
+#   interactive [<key>]      提交的 GUI 版（rofi/zenity，无 ii 弹框的机器用）：没改动=顺手同步，结果发通知
+#   capture-interactive [<key>]  速记的 GUI 版：收标题后建笔记，结果发通知
+#
+# 配置：~/.config/vault-commit/vaults.json（可用 VAULT_COMMIT_CONFIG 覆盖）
+#   { "mounts": ["/mnt/Storage"], "vaults": [{key,name,label,path}, ...] }
+#   · mounts：操作前必须已挂载，防「盘没挂 → add -A 把整库删光」
+#   · name 必须与 Obsidian 库的文件夹名一致（窗口标题靠它匹配）
+
+set -uo pipefail
+
+CONFIG="${VAULT_COMMIT_CONFIG:-$HOME/.config/vault-commit/vaults.json}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/vault-commit"
+LOCKDIR="${XDG_RUNTIME_DIR:-/tmp}/vault-commit"
+OBSIDIAN_JSON="$HOME/.config/obsidian/obsidian.json"
+
+# ── 输出工具 ────────────────────────────────────────────────────────────
+emit_err()       { jq -nc --arg e "$1" '{ok:false, error:$e}'; exit 1; }
+emit_err_stage() { jq -nc --arg s "$1" --arg e "$2" '{ok:false, stage:$s, error:$e}'; exit 0; }
+
+need_config() {
+  [[ -f "$CONFIG" ]] || emit_err "找不到配置文件：$CONFIG"
+  command -v jq >/dev/null 2>&1 || emit_err "缺少 jq"
+}
+
+check_mounts() {
+  local m
+  while IFS= read -r m; do
+    [[ -n "$m" ]] || continue
+    mountpoint -q "$m" || emit_err "挂载点未就绪：$m（磁盘没挂上，拒绝操作）"
+  done < <(jq -r '.mounts[]? // empty' "$CONFIG" 2>/dev/null)
+}
+
+# ── vault 解析（注意：只在主 shell 里 emit，不要放进 $() 里）────────────
+vault_field() { # $1=key $2=field
+  jq -r --arg k "$1" --arg f "$2" \
+     '.vaults[]? | select(.key==$k) | (.[$f] // "")' "$CONFIG" 2>/dev/null
+}
+
+vault_path() { # $1=key → 打路径；失败 return 1 且不输出（供 $() 捕获）
+  local p
+  p="$(vault_field "$1" path)"
+  [[ -n "$p" && "$p" != "null" ]] || return 1
+  [[ -d "$p" ]] || return 1
+  printf '%s' "$p"
+}
+
+# 结果放进全局 VAULT_PATH。**调用处绝不能写成 p="$(require_vault ...)"**——
+# 那样 emit_err 的 exit 只会杀掉子 shell，$p 会变成报错 JSON 文本（假成功 bug 的根源）。
+VAULT_PATH=""
+require_vault() { # $1=key；任何问题在主 shell 里 emit_err 并退出
+  VAULT_PATH="$(vault_path "$1")" \
+    || emit_err "找不到可用的 vault（key='$1'；路径不存在或 /mnt/Storage 没挂？）"
+  git -C "$VAULT_PATH" rev-parse --git-dir >/dev/null 2>&1 \
+    || emit_err "不是 git 仓库：$VAULT_PATH"
+}
+
+# ── 状态记忆（上次用的库）────────────────────────────────────────────
+state_get() { cat "$STATE_DIR/$1" 2>/dev/null; }
+state_set() { mkdir -p "$STATE_DIR"; printf '%s' "$2" > "$STATE_DIR/$1"; }
+
+# ── list ────────────────────────────────────────────────────────────────
+cmd_list() {
+  need_config
+  jq -c '{ok:true, vaults:[.vaults[] | {key, name, label, path}]}' "$CONFIG"
+}
+
+# ── detect ──────────────────────────────────────────────────────────────
+# 判定链：Obsidian 窗口标题 → obsidian.json 的 open（且必须在配置内）→ 上次用的
+detect_from_window() {
+  local titles t k
+  titles="$(hyprctl clients -j 2>/dev/null \
+    | jq -r '[.[] | select(((.class // "") | ascii_downcase) | test("obsidian"))]
+             | sort_by(.focusHistoryID) | .[].title' 2>/dev/null)" || return 1
+  [[ -n "$titles" ]] || return 1
+  while IFS= read -r t; do
+    [[ -n "$t" ]] || continue
+    # 库名按长度降序匹配，避免 "X" 把 "X Notes" 吞掉；标题 = "<笔记名> - <库名>" 或 "<库名>"
+    k="$(jq -r --arg t "$t" '
+        [.vaults[]?] | sort_by(.name | length) | reverse
+        | .[] | select($t == .name or ($t | endswith(" - " + .name))) | .key' "$CONFIG" 2>/dev/null | head -1)"
+    if [[ -n "$k" ]]; then printf '%s' "$k"; return 0; fi
+  done <<< "$titles"
+  return 1
+}
+
+detect_from_obsidian_json() {
+  local p k
+  [[ -f "$OBSIDIAN_JSON" ]] || return 1
+  p="$(jq -r '.vaults // {} | to_entries[] | select(.value.open == true) | .value.path' \
+        "$OBSIDIAN_JSON" 2>/dev/null | head -1)"
+  [[ -n "$p" && "$p" != "null" ]] || return 1
+  # 注意：没匹配时必须 return 1。直接以 jq|head 结尾的话，空输出也会因 head 的
+  # 退出码 0 被判成「成功」，链条就会在「配置里没有这个库」时误停（见过）。
+  k="$(jq -r --arg p "$p" '
+      .vaults[]? | select((.path | sub("/+$";"")) == ($p | sub("/+$";""))) | .key' \
+    "$CONFIG" 2>/dev/null | head -1)"
+  [[ -n "$k" ]] || return 1
+  printf '%s' "$k"
+}
+
+cmd_detect() {
+  need_config
+  check_mounts
+  local key source=""
+  if key="$(detect_from_window)"; then source="window"
+  elif key="$(detect_from_obsidian_json)"; then source="obsidian-json"
+  elif key="$(state_get last)"; then source="last"
+  fi
+  if [[ -n "$key" ]]; then
+    state_set last "$key"
+    jq -nc --arg k "$key" --arg src "$source" \
+       --arg n "$(vault_field "$key" name)" --arg l "$(vault_field "$key" label)" \
+       '{ok:true, key:$k, name:$n, label:$l, source:$src}'
+  else
+    jq -nc --argjson c "$(jq -c '[.vaults[]? | {key,name,label}]' "$CONFIG")" \
+       '{ok:false, error:"无法确定是哪个库", candidates:$c}'
+  fi
+}
+
+# ── status ──────────────────────────────────────────────────────────────
+# 护栏：整库删除（盘没挂/目录被换空时 add -A 的灾难提交）
+guard_mass_deletion() { # $1=path
+  local head_count deleted
+  head_count="$(git -C "$1" ls-tree -r HEAD --name-only 2>/dev/null | wc -l)"
+  deleted="$(git -C "$1" diff --cached --diff-filter=D --name-only | wc -l)"
+  if (( head_count > 20 )) && (( deleted * 2 > head_count )); then
+    emit_err "疑似整库删除（已 stage 删除 $deleted/$head_count 个文件），已拒绝。确认无误请手动 git commit"
+  fi
+}
+
+cmd_status() {
+  need_config
+  check_mounts
+  local key="${1:-}" p name label
+  require_vault "$key"; p="$VAULT_PATH"
+  name="$(vault_field "$key" name)"
+  label="$(vault_field "$key" label)"
+
+  # 先 add -A：让摘要精确等于「将要提交的内容」（幂等；apply 时会再 add 一次）
+  git -C "$p" add -A
+  guard_mass_deletion "$p"
+
+  local ahead
+  ahead="$(git -C "$p" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+
+  if git -C "$p" diff --cached --quiet; then
+    jq -nc --arg n "$name" --arg l "$label" --argjson a "${ahead:-0}" \
+      '{ok:true, name:$n, label:$l, clean:true, count:0, insertions:0, deletions:0, files:[], ahead:$a}'
+    return 0
+  fi
+
+  local files ins del
+  # -c core.quotePath=false 不能省：默认 git 会把非 ASCII 路径转义成 "\346\214\252..."
+  # 的样子（中文文件名全变乱码）。实测踩过。
+  files="$(git -C "$p" -c core.quotePath=false status --porcelain \
+    | awk '{ s=substr($0,1,2); gsub(/^ +| +$/,"",s); print s "\t" substr($0,4) }' \
+    | jq -Rn '[inputs | split("\t") | {status: .[0], path: (.[1:] | join("\t"))}]')"
+
+  read -r ins del < <(git -C "$p" diff --cached --numstat \
+    | awk '{ a += ($1 + 0); d += ($2 + 0) } END { printf "%d %d\n", a+0, d+0 }')
+
+  jq -nc --arg n "$name" --arg l "$label" --argjson a "${ahead:-0}" \
+     --argjson files "$files" --argjson ins "${ins:-0}" --argjson del "${del:-0}" \
+     '{ok:true, name:$n, label:$l, clean:false,
+       count:($files|length), insertions:$ins, deletions:$del, files:$files, ahead:$a}'
+}
+
+# ── apply ───────────────────────────────────────────────────────────────
+run_git_net() { # $1=path 其余=git 参数 → 打输出，带超时与禁交互（防断网吊死）
+  local p="$1"; shift
+  # 超时可用 $GIT_NET_TIMEOUT 调（默认 90s；「顺手同步」那条路调小到 30s）
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10" \
+    timeout "${GIT_NET_TIMEOUT:-90}" git -C "$p" "$@" 2>&1
+}
+
+run_push() { # $1=path 其余=git push 的参数
+  local p="$1"; shift
+  run_git_net "$p" push "$@"
+}
+
+cmd_apply() {
+  need_config
+  check_mounts
+  local key="${1:-}" msg="${2:-}"
+  [[ -n "$msg" ]] || emit_err "commit message 不能为空"
+
+  local p; require_vault "$key"; p="$VAULT_PATH"
+
+  # 连按两次快捷键时，第二次直接出局
+  mkdir -p "$LOCKDIR"
+  exec 9>"$LOCKDIR/$key.lock"
+  flock -n 9 || emit_err "另一个提交正在进行中，稍等"
+
+  git -C "$p" add -A
+  guard_mass_deletion "$p"
+
+  local hash
+  if git -C "$p" diff --cached --quiet; then
+    # 没有新改动。但可能是「上一轮提交成功了、push 失败了」→ 这时补推一次，
+    # 否则用户重试只会一直被告知「没有需要提交的改动」，永远推不上去。
+    if ! git -C "$p" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+      emit_err_stage "no-changes" "没有需要提交的改动"
+    fi
+    if [[ "$(git -C "$p" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)" == "0" ]]; then
+      # 「顺手同步」：干净且不领先 → 把另一台机器推的拉下来。
+      # 双机并用的读路径（坐下来只想看另一台昨晚写的东西）；按 G/回车也是走这里。
+      local before after n pout
+      before="$(git -C "$p" rev-parse HEAD 2>/dev/null)"
+      if pout="$(GIT_NET_TIMEOUT=30 run_git_net "$p" pull --rebase)"; then
+        after="$(git -C "$p" rev-parse HEAD 2>/dev/null)"
+        n="$(git -C "$p" rev-list --count "$before..$after" 2>/dev/null || echo 0)"
+        if [[ "${n:-0}" == "0" ]]; then
+          emit_err_stage "no-changes" "没有需要提交的改动（远端也是最新的）"
+        else
+          emit_err_stage "no-changes" "没有需要提交的改动 · 已从另一台同步 $n 个提交"
+        fi
+      else
+        emit_err_stage "pull" "没有需要提交的改动，但同步远端失败：${pout:-无输出}"
+      fi
+    fi
+  else
+    local out
+    if ! out="$(git -C "$p" commit -m "$msg" 2>&1)"; then
+      emit_err_stage "commit" "$out"
+    fi
+  fi
+
+  hash="$(git -C "$p" rev-parse --short HEAD)"
+
+  # push：带 90s 超时（断网/代理挂掉时 git 会吊死，弹框会永远停在「推送中」）
+  local perr rc=0
+  perr="$(run_push "$p")" || rc=$?
+  if (( rc != 0 )); then
+    if ! git -C "$p" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+      # 没有 upstream 的仓库（新建分支/首次推送）——补一次 -u。
+      # ⚠️ 重试前 rc 必须先归零：重试成功时 `|| rc=$?` 不执行，rc 会留着上一次的失败码
+      # → 明明推成功了却报「推送失败」（实测踩过）。
+      rc=0
+      perr="$(run_push "$p" -u origin HEAD)" || rc=$?
+    elif grep -qiE "non-fast-forward|fetch first|\[rejected\]" <<< "$perr"; then
+      # 远端有新提交（多半是另一台机器推的）→ rebase 到远端之上再重推。
+      # 双机并用（Arch 晚上写 / Fedora 白天写）的核心路径。
+      local preb
+      if preb="$(run_git_net "$p" pull --rebase)"; then
+        rc=0
+        perr="$(run_push "$p")" || rc=$?
+      elif [[ -d "$p/.git/rebase-merge" || -d "$p/.git/rebase-apply" ]]; then
+        # 两边改了同一处 → 停在中途。abort 保持干净（本地提交还在），让用户手动解决
+        git -C "$p" rebase --abort >/dev/null 2>&1
+        jq -nc --arg h "$hash" --arg path "$p" \
+          '{ok:false, stage:"conflict", hash:$h,
+            error:("另一台机器的改动与本地冲突，已停止（你的提交还在本地 " + $h + "）。"
+                   + "去终端执行：cd \"" + $path + "\" && git pull --rebase 手动解决后重试")}'
+        return 0
+      else
+        jq -nc --arg h "$hash" --arg e "${preb:-拉取失败（无输出）}" \
+          '{ok:false, stage:"pull", hash:$h,
+            error:("提交已在本地（" + $h + "），但同步远端失败：" + $e)}'
+        return 0
+      fi
+    fi
+  fi
+  if (( rc == 124 )); then perr="推送超时（90 秒无响应，检查网络/代理）"; fi
+  if (( rc != 0 )); then
+    jq -nc --arg h "$hash" --arg e "${perr:-推送失败（无输出）}" \
+      '{ok:false, stage:"push", hash:$h,
+        error:("提交已在本地（" + $h + "），但推送失败：" + $e)}'
+    return 0
+  fi
+
+  state_set last "$key"
+  jq -nc --arg h "$hash" --arg n "$(vault_field "$key" name)" \
+    '{ok:true, stage:"pushed", hash:$h, name:$n}'
+}
+
+# ── 速记：新建笔记 ──────────────────────────────────────────────────────
+ordinal() {
+  case "$1" in
+    11|12|13) printf '%s' "${1}th" ;;
+    *1)       printf '%s' "${1}st" ;;
+    *2)       printf '%s' "${1}nd" ;;
+    *3)       printf '%s' "${1}rd" ;;
+    *)        printf '%s' "${1}th" ;;
+  esac
+}
+
+cmd_title_prefix() {
+  # LC_TIME=C 保证月份是英文（否则中文 locale 下会出「七月」）
+  local day mon
+  day="$(LC_TIME=C date +%-d)"
+  mon="$(LC_TIME=C date +%B)"
+  printf '%s %s, %s - \n' "$mon" "$(ordinal "$day")" "$(LC_TIME=C date +%Y)"
+}
+
+cmd_capture() {
+  need_config
+  check_mounts
+  local key="${1:-}" text="${2:-}"
+  [[ -n "$text" ]] || emit_err "标题内容不能为空"
+
+  local p; require_vault "$key"; p="$VAULT_PATH"
+
+  local prefix title file
+  prefix="$(cmd_title_prefix)"
+  # 前端预填了前缀 → 不重复叠加
+  if [[ "$text" == "$prefix"* ]]; then title="$text"; else title="${prefix}${text}"; fi
+  # 去掉 Obsidian 不接受的文件名字符，并掐掉尾部空白
+  title="$(printf '%s' "$title" | tr -d '\\/:*?"<>|' | sed 's/[[:space:]]*$//')"
+  [[ -n "$title" ]] || emit_err "标题清洗后为空"
+
+  file="$p/$title.md"
+  [[ -e "$file" ]] && emit_err "同名笔记已存在：$title.md"
+
+  : > "$file" || emit_err "创建失败：$file"
+
+  # 在 Obsidian 里打开（新文件也能按绝对路径解析）
+  local uri="obsidian://open?path=$(jq -rn --arg s "$file" '$s|@uri')"
+  if ! xdg-open "$uri" >/dev/null 2>&1; then
+    (obsidian "$uri" >/dev/null 2>&1 &) || true
+  fi
+
+  state_set last "$key"
+  jq -nc --arg t "$title" --arg f "$file" --arg u "$uri" \
+    '{ok:true, title:$t, file:$f, uri:$u}'
+}
+
+# ── interactive（无 ii 弹框的机器：Arch 上是兜底，Fedora/GNOME 是主力）──
+# rofi 优先，没有就用 zenity（GNOME 自带，零安装）
+
+need_gui() {
+  command -v rofi >/dev/null 2>&1 || command -v zenity >/dev/null 2>&1 \
+    || emit_err "需要 rofi 或 zenity 来收输入"
+}
+
+gui_ask() { # $1=标题 $2=提示文字 → 打印用户输入
+  if command -v rofi >/dev/null 2>&1; then
+    printf '' | rofi -dmenu -p "$1" -mesg "$2"
+  else
+    zenity --entry --title="$1" --text="$2" --width=420
+  fi
+}
+
+gui_pick() { # $1=标题 其余=候选项 → 打印选中项
+  local prompt="$1"; shift
+  if command -v rofi >/dev/null 2>&1; then
+    printf '%s\n' "$@" | rofi -dmenu -i -p "$prompt"
+  else
+    zenity --list --title="$prompt" --column="选择" --width=440 --height=280 "$@"
+  fi
+}
+
+# 认不出库时弹选择器；选不动就返回 1
+pick_vault_key() { # $1=提示语 → 打印 key
+  local choices=() choice
+  mapfile -t choices < <(jq -r '.vaults[]? | "\(.label)  (\(.name))"' "$CONFIG")
+  choice="$(gui_pick "$1" "${choices[@]}")" || return 1
+  [[ -n "$choice" ]] || return 1
+  jq -r --arg c "$choice" \
+    '.vaults[]? | select(("\(.label)  (\(.name))") == $c) | .key' "$CONFIG" | head -1
+}
+
+# 结果 → 桌面通知。给没有 quickshell 弹框的机器用（GNOME 快捷键的 stdout 是死的，
+# 不通知的话成功/失败都看不见）。没有 notify-send 就静默跳过。
+notify_result() { # $1=JSON
+  command -v notify-send >/dev/null 2>&1 || return 0
+  local ok stage
+  ok="$(jq -r '.ok // false' <<< "$1" 2>/dev/null)"
+  stage="$(jq -r '.stage // ""' <<< "$1" 2>/dev/null)"
+  if [[ "$ok" == "true" ]]; then
+    local body
+    if [[ "$stage" == "pushed" ]]; then
+      body="已提交并推送（$(jq -r '.hash // ""' <<< "$1")）"
+    else
+      body="$(jq -r '.title // .name // "完成"' <<< "$1")"
+    fi
+    notify-send -a vault-commit "笔记" "$body"
+  elif [[ "$stage" == "no-changes" ]]; then
+    notify-send -a vault-commit "笔记" "$(jq -r '.error // "没有需要提交的改动"' <<< "$1")"
+  else
+    notify-send -u critical -a vault-commit "笔记：没成功" "$(jq -r '.error // "未知错误"' <<< "$1")"
+  fi
+}
+
+cmd_interactive() {
+  need_config
+  check_mounts
+  need_gui
+  local key="${1:-}" msg st out
+
+  # 认库：跟速记同一条链（GNOME 上没有 hyprctl，自然落到 obsidian.json）
+  if [[ -z "$key" ]]; then
+    if ! key="$(detect_from_window)"; then
+      if ! key="$(detect_from_obsidian_json)"; then
+        key="$(state_get last)"
+      fi
+    fi
+  fi
+  if [[ -z "$key" ]]; then
+    key="$(pick_vault_key "提交哪个库")" || exit 1
+    [[ -n "$key" ]] || exit 1
+  fi
+
+  # 没有改动就不问 message：按一下 = 顺手同步（cmd_apply 的「无改动」分支会拉远端）
+  st="$(cmd_status "$key" 2>/dev/null)"
+  if [[ "$(jq -r '.clean' <<< "$st" 2>/dev/null)" == "true" ]]; then
+    msg="（同步）"
+  else
+    msg="$(gui_ask "commit message" "库：$key")" || exit 1
+    [[ -n "$msg" ]] || { echo "已取消（message 为空）" >&2; exit 1; }
+  fi
+
+  out="$(cmd_apply "$key" "$msg")"
+  printf '%s\n' "$out"
+  notify_result "$out"
+}
+
+cmd_capture_interactive() {
+  need_config
+  check_mounts
+  need_gui
+  local key="${1:-}" text out
+
+  # 认库：跟 detect 同一条链，只是静默（GNOME 上没有 hyprctl，自然会落到 obsidian.json）
+  if [[ -z "$key" ]]; then
+    if ! key="$(detect_from_window)"; then
+      if ! key="$(detect_from_obsidian_json)"; then
+        key="$(state_get last)"
+      fi
+    fi
+  fi
+  if [[ -z "$key" ]]; then
+    key="$(pick_vault_key "写到哪个库")" || exit 1
+    [[ -n "$key" ]] || exit 1
+  fi
+
+  text="$(gui_ask "笔记标题" "会存成「$(cmd_title_prefix | tr -d '\n')<你写的>」")" || exit 1
+  [[ -n "$text" ]] || { echo "已取消（标题为空）" >&2; exit 1; }
+
+  out="$(cmd_capture "$key" "$text")"
+  printf '%s\n' "$out"
+  notify_result "$out"
+}
+
+# ── 入口 ────────────────────────────────────────────────────────────────
+case "${1:-}" in
+  list)         cmd_list ;;
+  detect)       cmd_detect ;;
+  status)       cmd_status "${2:-}" ;;
+  apply)        cmd_apply "${2:-}" "${3:-}" ;;
+  title-prefix) cmd_title_prefix ;;
+  capture)      cmd_capture "${2:-}" "${3:-}" ;;
+  interactive)  cmd_interactive "${2:-}" ;;
+  capture-interactive|capture-i) cmd_capture_interactive "${2:-}" ;;
+  ""|-h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) emit_err "未知子命令：$1（可用：list / detect / status / apply / title-prefix / capture / interactive / capture-interactive）" ;;
+esac

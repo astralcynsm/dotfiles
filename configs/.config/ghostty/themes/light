@@ -1,0 +1,34 @@
+# 核心背景与前景
+background = #e6e5e3
+foreground = #5c6a72
+background-opacity = 0.85
+
+# 选择区颜色
+selection-background = #f3eac7
+selection-foreground = #939f91
+
+# 光标颜色
+# cursor-color = #5c6a72
+cursor-text = #d4c690
+
+# --- 调色板渲染 (翻译自 Foot 的 regular/bright) ---
+
+# Normal Colors (regular 0-7)
+palette = 0=#7994a3
+palette = 1=#f85552
+palette = 2=#8da101
+palette = 3=#dfa000
+palette = 4=#3a94c5
+palette = 5=#df69ba
+palette = 6=#35a77c
+palette = 7=#dfddc8
+
+# Bright Colors (bright 0-7)
+palette = 8=#4c5962
+palette = 9=#e67e80
+palette = 10=#a7c080
+palette = 11=#dbbc7f
+palette = 12=#7fbbb3
+palette = 13=#d699b6
+palette = 14=#83c092
+palette = 15=#9da9a0

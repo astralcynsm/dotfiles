@@ -1,0 +1,75 @@
+# ~/.config/starship.toml
+
+add_newline = true
+command_timeout = 50
+scan_timeout = 50
+
+# 1. 在这里紧跟 git_status 之后，加入了 python, rust, nodejs, bun, golang
+format = """
+[](#504945)$directory[](fg:#504945 bg:#665c54)$git_branch[](fg:#665c54 bg:#3c3836)$git_status[](fg:#3c3836)$python$rust$nodejs$bun$golang$fill$status$time
+$character"""
+
+[directory]
+style = "bg:#504945 fg:#ebdbb2 bold"
+format = "[  $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[git_branch]
+symbol = " "
+style = "bg:#665c54 fg:#ebdbb2 bold"
+format = "[ $symbol$branch ]($style)"
+
+[git_status]
+style = "bg:#3c3836 fg:#d65d0e bold"
+format = "[ $all_status$ahead_behind ]($style)"
+
+[status]
+disabled = false
+format = '[ [ 󱖫 $int ](fg:#af3a03 bg:#282828) ]($style)'
+style = "fg:#af3a03"
+
+[time]
+disabled = false
+time_format = "%R"
+style = "bg:#282828 fg:#928374"
+format = "[ 󱑎 $time ]($style)[](#282828)"
+
+[fill]
+symbol = " "
+
+[character]
+success_symbol = "[ ○ ](bold #899c60) [❯](bold #928374)" 
+error_symbol = "[ ● ](bold #9d0006) [❯](bold #928374)"
+vimcmd_symbol = "[ ■ ](bold #bdae93) [❮](bold #928374)"
+
+# ==========================
+# 开发环境与工具链适配
+# ==========================
+
+[python]
+symbol = " "
+style = "bold #a9b665" # Gruvbox 绿色
+# 2. 加入了 ( \($virtualenv\)) 条件渲染语法。当存在 uv/venv 虚拟环境时，会显示括号及环境名。
+format = " [ $symbol$version( \\($virtualenv\\)) ]($style)"
+
+[rust]
+symbol = " "
+style = "bold #d65d0e" # Gruvbox 橙色
+format = " [ $symbol$version ]($style)"
+
+[nodejs]
+symbol = " "
+style = "bold #83a598" # Gruvbox 蓝色
+format = " [ $symbol$version ]($style)"
+
+[bun]
+symbol = " "
+style = "bold #fabd2f" # Gruvbox 黄色
+format = " [ $symbol$version ]($style)"
+
+[golang]
+symbol = " "
+style = "bold #8ec07c" # Gruvbox 青色
+format = " [ $symbol$version ]($style)"
+

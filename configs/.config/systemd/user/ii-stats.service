@@ -1,0 +1,20 @@
+[Unit]
+Description=ii sidebar stats collector (system metrics + typing details)
+Documentation=file:%h/.local/bin/ii-stats-daemon
+# 跟 rime_counter.service 同一套：跟着图形会话起停
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ii-stats-daemon
+Restart=on-failure
+RestartSec=10
+# 采样要读 /proc、/sys/class/hwmon、power_supply，都是只读的
+Nice=5
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

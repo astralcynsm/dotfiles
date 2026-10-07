@@ -1,0 +1,9 @@
+# quickshell 版本钉死 —— 二进制与 ii 源码配套，漂移 = 整套 UI 可能碎掉
+#
+# 主力机 qs --version 原文（2026-10-08 实测）：
+#   Quickshell 0.2.1 (revision 7511545ee20664e3b8b8d3322c0ffe7567c56f7a, distributed by AUR (package: quickshell-git))
+#
+# 判定方式：qs --version 的输出里必须包含下面这一行（最后一行是给脚本读的）
+# 为什么钉：此版本无 keepAlive 属性（靠 systemd 保活）、QSG_RENDER_LOOP 行为
+# 已调好、与 ii 树逐字节配套。见 docs/known-issues.md R1。
+7511545ee20664e3b8b8d3322c0ffe7567c56f7a

@@ -1,0 +1,7 @@
+# Gruvbox Light —— 固定配色，与壁纸无关
+THEME_DESC="Gruvbox Light（固定配色）"
+THEME_TYPE="static"
+THEME_ASSETS="gruvbox-light"
+# 决定 GTK 应用/系统走浅色还是深色（gsettings color-scheme + gtk-theme）。
+# 不写就是 dark。
+THEME_MODE="light"

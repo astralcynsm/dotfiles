@@ -1,0 +1,3 @@
+#!/bin/bash
+# 告诉系统现在偏好暗色
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'

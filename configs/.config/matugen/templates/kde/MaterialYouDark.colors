@@ -1,0 +1,181 @@
+# ---- 由 matugen 生成，请勿手改 ----
+# 模板源: ~/.config/matugen/templates/kde/MaterialYouDark.colors
+# 输出:   ~/.local/share/color-schemes/MaterialYouDark.colors
+#
+# 这是 KDE 配色方案（Color Scheme），Dolphin 及所有 KDE 应用读它。
+# 由主题切换器 switch.sh 调 `matugen image <壁纸> --mode <模式>` 时自动生成，
+# 挂在 ~/.config/matugen/config.toml 的 [templates.kde_dark] 下。
+#
+# 为什么明暗各写一份、且钉死 .dark / .light 后缀：
+#   KDE 不像 fcitx5 那样自带"按系统 color-scheme 自动选主题"的机制。
+#   它只有一个值：~/.config/kdeglobals 的 [General] ColorScheme=。
+#   所以必须两套方案并存于磁盘，由 switch.sh 改写 kdeglobals 来选。
+#   用 .default 会让两份文件在切明暗时互相覆盖。
+#   （实测：即使带 --mode 跑，本文件里的取值也只认后缀，不受 --mode 影响）
+#
+# 配色取舍，与 rofi / fcitx5 候选框保持一致：
+#   · 强调色用 primary，大面积容器色用 *_container 系
+#   · 选中项用 primary_container / on_primary_container —— 这一组本就是
+#     为"容器"设计的，明暗下对比度都够；直接用 primary 在浅色模式下会刺眼
+#   · M3 调色板里没有绿色，KDE 却硬性要求一个 ForegroundPositive（成功/确认态）。
+#     这里给它 secondary（柔和的辅助色），换来整套配色的和谐；
+#     副作用是"成功"语义不如纯绿直观，但该色在 Dolphin 里出现频率极低。
+#
+# [WM] 段的格式是 #AARRGGBB（原文件 activeBackground=#ff3b3030），
+# 所以用 hex_stripped 拼一个 ff 前缀。Hyprland 下这段不被读取（KWin 才读），
+# 但保持格式正确，免得以后换 WM 或 KDE 工具校验时报错。
+
+[ColorEffects:Disabled]
+Color={{colors.surface_container.dark.hex}}
+ColorAmount=0.5
+ColorEffect=3
+ContrastAmount=0
+ContrastEffect=0
+IntensityAmount=0
+IntensityEffect=0
+
+[ColorEffects:Inactive]
+ChangeSelectionColor=true
+Color={{colors.surface.dark.hex}}
+ColorAmount=0.025
+ColorEffect=0
+ContrastAmount=0.1
+ContrastEffect=0
+Enable=true
+IntensityAmount=0
+IntensityEffect=0
+
+[Colors:Button]
+BackgroundAlternate={{colors.surface_container_highest.dark.hex}}
+BackgroundNormal={{colors.surface_container_high.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_surface.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+[Colors:Complementary]
+BackgroundAlternate={{colors.surface_container_low.dark.hex}}
+BackgroundNormal={{colors.surface_container.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_surface.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+[Colors:Header]
+BackgroundAlternate={{colors.surface_container_high.dark.hex}}
+BackgroundNormal={{colors.surface_container.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_surface.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+[Colors:Header][Inactive]
+BackgroundAlternate={{colors.surface_container_high.dark.hex}}
+BackgroundNormal={{colors.surface_container.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_surface.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+# 选中项：文件列表/菜单里高亮的那一行。
+# 用 container 组而不是 primary 本身 —— 见文件头说明。
+[Colors:Selection]
+BackgroundAlternate={{colors.primary_container.dark.hex}}
+BackgroundNormal={{colors.primary_container.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_primary_container.dark.hex}}
+ForegroundInactive={{colors.on_primary_container.dark.hex}}
+ForegroundLink={{colors.on_primary_container.dark.hex}}
+ForegroundNegative={{colors.on_primary_container.dark.hex}}
+ForegroundNeutral={{colors.on_primary_container.dark.hex}}
+ForegroundNormal={{colors.on_primary_container.dark.hex}}
+ForegroundPositive={{colors.on_primary_container.dark.hex}}
+ForegroundVisited={{colors.on_primary_container.dark.hex}}
+
+[Colors:Tooltip]
+BackgroundAlternate={{colors.surface_container_highest.dark.hex}}
+BackgroundNormal={{colors.surface_container_high.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_surface.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+# 视图区（文件列表、文本编辑区）—— Dolphin 里最显眼的一段。
+# 比 Window 更暗一档，形成"窗口底 < 内容区"的层次。
+[Colors:View]
+BackgroundAlternate={{colors.surface_container_low.dark.hex}}
+BackgroundNormal={{colors.surface.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.on_surface.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+# 窗口底色 + 标题栏文字。只有这一段用 primary 当 ForegroundActive
+# （跟随原 KDE 方案的惯例：窗口标题高亮时变色，其它段落不变）。
+[Colors:Window]
+BackgroundAlternate={{colors.surface_container_high.dark.hex}}
+BackgroundNormal={{colors.surface_container.dark.hex}}
+DecorationFocus={{colors.primary.dark.hex}}
+DecorationHover={{colors.primary.dark.hex}}
+ForegroundActive={{colors.primary.dark.hex}}
+ForegroundInactive={{colors.on_surface_variant.dark.hex}}
+ForegroundLink={{colors.primary.dark.hex}}
+ForegroundNegative={{colors.error.dark.hex}}
+ForegroundNeutral={{colors.tertiary.dark.hex}}
+ForegroundNormal={{colors.on_surface.dark.hex}}
+ForegroundPositive={{colors.secondary.dark.hex}}
+ForegroundVisited={{colors.tertiary.dark.hex}}
+
+[General]
+ColorScheme=MaterialYouDark
+Name=Material You dark
+shadeSortColumn=true
+
+[KDE]
+contrast=4
+
+# ARGB 格式：#ff + hex_stripped
+[WM]
+activeBackground=#ff{{colors.surface_container.dark.hex_stripped}}
+activeBlend={{colors.on_surface.dark.red}},{{colors.on_surface.dark.green}},{{colors.on_surface.dark.blue}}
+activeForeground=#ff{{colors.on_surface.dark.hex_stripped}}
+inactiveBackground=#ff{{colors.surface.dark.hex_stripped}}
+inactiveBlend={{colors.on_surface_variant.dark.red}},{{colors.on_surface_variant.dark.green}},{{colors.on_surface_variant.dark.blue}}
+inactiveForeground=#ff{{colors.on_surface_variant.dark.hex_stripped}}

@@ -1,0 +1,17 @@
+{
+  "mounts": ["/mnt/Storage"],
+  "vaults": [
+    {
+      "key": "code",
+      "name": "Learning and Coding Shit",
+      "label": "代码与仓库",
+      "path": "/mnt/Storage/files/ObsidianFiles/Learning and Coding Shit"
+    },
+    {
+      "key": "secondbrain",
+      "name": "SecondBrain",
+      "label": "第二大脑",
+      "path": "/mnt/Storage/files/ObsidianFiles/SecondBrain"
+    }
+  ]
+}

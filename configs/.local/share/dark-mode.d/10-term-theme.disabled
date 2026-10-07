@@ -1,0 +1,5 @@
+#!/bin/bash
+cp ~/.config/foot/themes/dark.ini ~/.config/foot/current_theme.ini
+ln -sf ~/.config/rio/themes/my-dark.toml ~/.config/rio/themes/current.toml
+# cp ~/.config/ghostty/themes/dark ~/.config/ghostty/active-theme
+# gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'

@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# --- 核心配置 ---
+WATCH_DIR="/mnt/Storage/Music"           # 你的 120GB 库路径
+PLAYLIST_NAME="Master"                  # 你在播放器里建的标签名
+BEEFWEB_URL="http://127.0.0.1:8880"      # 默认端口
+DEBOUNCE_TIME=5                         # 延迟5秒，防止大规模刮削时频繁触发
+
+sync_logic() {
+    echo "[$(date +%T)] 监听到库变更，正在同步..."
+    
+    # 1. 找 ID
+    PL_ID=$(curl -s "$BEEFWEB_URL/api/playlists" | jq -r ".playlists[] | select(.title==\"$PLAYLIST_NAME\") | .id")
+    
+    if [ -z "$PL_ID" ]; then
+        echo "错误: 没找到名为 '$PLAYLIST_NAME' 的列表，请先创建一个。"
+        return
+    fi
+
+    # 2. 清空列表 (这是为了实现真正意义上的“同步”，而不是“追加”)
+    curl -s -X DELETE "$BEEFWEB_URL/api/playlists/$PL_ID/items/all" > /dev/null
+
+    # 3. 重新递归添加整个 120GB 文件夹
+    # DeaDBeeF 的扫描速度非常快，2-3秒就能完成索引更新
+    curl -s -X POST "$BEEFWEB_URL/api/playlists/$PL_ID/items/add" \
+         -H "Content-Type: application/json" \
+         -d "{\"filenames\": [\"$WATCH_DIR\"]}" > /dev/null
+
+    echo "[$(date +%T)] Master 列表同步完成。"
+}
+
+# --- 监听逻辑 ---
+echo "正在监视: $WATCH_DIR"
+inotifywait -m -r -e close_write,moved_to,moved_from,delete "$WATCH_DIR" --format '%e %w%f' | while read -r event file; do
+    # 防抖处理：在 120GB 写入时只在最后执行一次
+    if [[ -n $SYNC_PID ]]; then kill $SYNC_PID 2>/dev/null; fi
+    ( sleep $DEBOUNCE_TIME && sync_logic ) &
+    SYNC_PID=$!
+done

@@ -1,0 +1,14 @@
+{
+  "name": "死亡搁浅",
+  "description": "圆角归零、动画缩短到六成并换成标准曲线（不弹）、字距放宽、开面板描边。注意配色不在这里 —— 它走主题切换器里的 death-stranding 静态主题；Hyprland 的窗口圆角也不归 preset 管，要自己去装饰设置里关。",
+  "values": {
+    "rounding.scale": 0,
+    "rounding.full": 3,
+    "rounding.windowRounding": 0,
+    "animation.scale": 0.6,
+    "animation.curveStyle": "standard",
+    "letterSpacing": 0.5,
+    "iconFillAll": false,
+    "panelOutline": true
+  }
+}

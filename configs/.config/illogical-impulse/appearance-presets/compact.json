@@ -1,0 +1,18 @@
+{
+  "name": "紧凑",
+  "description": "更小的字号与圆角、更窄的面板、更快的动画。适合小屏，或想一眼看到更多信息。",
+  "values": {
+    "rounding.scale": 0.7,
+    "fontSize.scale": 0.88,
+    "animation.scale": 0.75,
+    "sizes.sidebarWidth": 380,
+    "sizes.sidebarWidthExtended": 620,
+    "sizes.notificationPopupWidth": 340,
+    "sizes.osdWidth": 150,
+    "sizes.mediaControlsWidth": 360,
+    "sizes.mediaControlsHeight": 130,
+    "sizes.searchWidth": 300,
+    "sizes.elevationMargin": 6,
+    "letterSpacing": 0
+  }
+}

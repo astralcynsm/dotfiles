@@ -1,0 +1,15 @@
+[Unit]
+Description=Hyprland Session
+Documentation=man:systemd.special(7)
+
+# graphical-session.target 是 RefuseManualStart=yes 的（只能被依赖拉起），
+# 而且带 StopWhenUnneeded=yes —— 没有活动单元依赖它就会被立刻停掉。
+# 所以这里用 BindsTo 把它拉起来：
+#   BindsTo  让 hyprland-session 跟着 graphical-session 一起停，
+#            同时算作"有单元依赖它"，graphical-session 才不会被 StopWhenUnneeded 停掉。
+# After     保证顺序。
+#
+# 由 Hyprland 的 Startup_Apps.lua 在导入环境变量之后 start 这个 target，
+# WantedBy=graphical-session.target 的单元（rime_counter / solaar）随之启动。
+BindsTo=graphical-session.target
+After=graphical-session.target

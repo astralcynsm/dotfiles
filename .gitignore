@@ -1,0 +1,65 @@
+# ════════════════════════════════════════════════════════════════════════
+# 第二道闸门。第一道在 scripts/export-from-arch.sh 里（rsync --exclude）——
+# 那份是"不导出"，这份是"导出了也不许提交"。
+# ════════════════════════════════════════════════════════════════════════
+
+# ── 密钥：永远不进仓库 ──────────────────────────────────────────────────
+# （last.fm apiKey 已由导出脚本擦除，见 scripts/export-from-arch.sh 第 14 步）
+.git-credentials
+.netrc
+*_rsa
+*_ed25519
+*.pem
+*.key
+secrets.env
+
+# ── 运行期状态 / 生成物 ─────────────────────────────────────────────────
+**/wallpaper_effects/
+**/.initial_startup_done
+**/theme-switcher/current
+**/theme-switcher/.last-manual
+**/*.jsonl
+**/installed_listfile
+**/.last-manual
+configs/.config/hypr/hyprlock/.cache/
+
+# ── 备份与编辑器残留 ────────────────────────────────────────────────────
+*.bak
+*.bak-*
+*.bak.*
+*.old
+*.orig
+*.rej
+*~
+
+# ── 二进制（ELF 不进仓库，工作机重编）────────────────────────────────────
+configs/.local/bin/Vital
+configs/.local/bin/hydectl
+configs/.local/bin/hyde-shell
+configs/.local/bin/quickshell
+configs/.local/bin/qs
+configs/.local/src/**/target/
+configs/.local/src/**/*.rlib
+
+# ── 嵌套 git 仓库（plum 是 clone 来的，进去会让父仓记成坏掉的 gitlink）────
+configs/.local/share/fcitx5/rime/plum/.git/
+
+# ── rime 大件（上游数据靠 plum 重装）────────────────────────────────────
+configs/.local/share/fcitx5/rime/build/
+configs/.local/share/fcitx5/rime/sync/
+configs/.local/share/fcitx5/rime/cn_dicts/
+configs/.local/share/fcitx5/rime/py_wordscounter/
+configs/.local/share/fcitx5/rime/en_dicts/
+configs/.local/share/fcitx5/rime/others/
+configs/.local/share/fcitx5/rime/SouGouDicts.txt
+configs/.local/share/fcitx5/rime/radical_pinyin.dict.yaml
+
+# ── Claude Code 本地设置（含权限清单，机器特定）─────────────────────────
+**/.claude/settings.local.json
+.claude/settings.local.json
+
+# ── Python / 构建残留 ───────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

@@ -1,0 +1,15 @@
+[Unit]
+Description=Rime Input Method Words Counter Service
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# [ii 迁移] 原来指向旧的 python 版：
+#   /home/cynsm/rime_counter/.venv/bin/python .../py_wordscounter/words_counter.py
+# 已换成 rust 版（和 Hyprland 自启用的是同一个二进制）。
+# 两个版本会抢同一个 /tmp/rime_status.json，所以只能跑一个。
+ExecStart=%h/.local/bin/rime_counter_rs
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

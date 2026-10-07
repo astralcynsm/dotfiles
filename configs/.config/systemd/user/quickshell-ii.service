@@ -1,0 +1,53 @@
+[Unit]
+Description=illogical-impulse (quickshell) UI shell
+Documentation=file:%h/.config/quickshell/ii/shell.qml
+# 跟 rime_counter.service / ii-stats.service 同一套：跟着图形会话起停
+After=graphical-session.target
+PartOf=graphical-session.target
+
+# 万一配置坏了导致连崩，别无限刷日志：5 分钟内崩超过 20 次就停下并进 failed
+# （systemctl --user status quickshell-ii 看原因）。
+# [2026-09-29 教训] 原来是 60 秒/10 次，但「显存+内存被游戏挤爆 → qs 启动期就
+# 拿不到 EGL surface → 崩」这种**外部瞬时压力**下，它 2 秒崩一次、4 秒就烧光 10 次配额，
+# 于是 start-limit-hit —— 游戏退出、GPU 空了，bar 也永久躺平不会自愈，只能手动
+# reset-failed。放宽到 5 分钟/20 次，让压力过去后自己回来；配置真坏了照样会停下。
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+# [帧率修复] 必须显式指定，否则 Wayland+EGL 下 Qt 走 GLES2 的 basic render loop，
+# 动画退化到 Qt QUnifiedTimer 的 16ms 兜底节拍（=62.5fps）。
+# 显式 threaded 后跟随 vsync（实测 180.5fps @180Hz）。详见 Startup_Apps.lua 的注释。
+Environment=QSG_RENDER_LOOP=threaded
+# systemd user 的默认 PATH 不含 %h/.local/bin，而 ii 会调那底下的自写脚本，补上。
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# [2026-10-07 输入法] 只给这一个服务开，**不要**动 /etc/environment —— 那儿的
+# QT_IM_MODULE 是被故意注释掉的（Wayland 下全局设它会绕过 text-input 协议，
+# fcitx5 官方就不建议）。但 quickshell 是 Qt 应用、又不走 text-input，没有这个
+# 变量就不会加载 fcitx5-qt 的平台输入上下文插件，面板里打不出中文。
+# 实测：不设 → /proc/<pid>/maps 里 0 处 fcitx 命中；设上 → 插件加载，
+# 在弹框里打 "nihao"+空格 出「你好」。
+Environment=QT_IM_MODULE=fcitx
+
+ExecStart=/usr/bin/qs -c ii
+
+# 强制保活：不管它是崩了、还是被 closewindow 之类误杀，都拉回来
+Restart=always
+# [2026-09-29] 1 秒太急：EGL/GPU 压力下 2 秒崩一次，跟 StartLimit 一起把配额快速烧光。
+# 3 秒给驱动一点喘息，配合上面放宽的 5 分钟/20 次。
+RestartSec=3
+
+# [防连坐] 从 bar 启动的 app 是 desktopEntry.execute() 直接从 qs fork 的，
+# cgroup 就是本 unit（QQ/Steam/游戏都在里面）。默认 KillMode=control-group 会在
+# 主进程崩溃、systemd 停 unit 时把整个 cgroup SIGTERM 清场 —— 2026-09-25 就这么
+# 一次性带走了无人深空 + Steam + QQ×3。改成只杀主进程，孤儿留着。
+KillMode=process
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# 由 Startup_Apps.lua 末尾的 `systemctl --user start hyprland-session.target` 拉起
+# （那一刻 WAYLAND_DISPLAY 已经 import-environment 进 systemd 了）
+WantedBy=hyprland-session.target

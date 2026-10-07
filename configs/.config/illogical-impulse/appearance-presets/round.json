@@ -1,0 +1,8 @@
+{
+  "name": "大圆角",
+  "description": "只把圆角拉到最大，字号/尺寸/动画保持不动。",
+  "values": {
+    "rounding.scale": 2,
+    "letterSpacing": 0
+  }
+}

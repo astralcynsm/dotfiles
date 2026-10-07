@@ -1,0 +1,790 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+plymouth-ii-theme —— 生成「ii」开机画面（plymouth script 主题）
+
+配色不写死：从主题切换器当前生效的 colors.json 里读
+（~/.local/state/quickshell/user/generated/colors.json）。
+那份文件两条路都会写 ——
+  matugen 主题：跟着壁纸实时生成
+  static  主题：从 assets/<主题>/colors.json 拷过来
+所以开机画面永远和桌面是同一套色，换主题不用改这里。
+
+用法:
+  plymouth-ii-theme --preview    只生成 + 出一张 2560x1440 模拟图（先看效果）
+  plymouth-ii-theme --gen        只生成到 ~/.cache/ii-plymouth
+  plymouth-ii-theme --install    生成 + 装进系统 + 重建 initramfs（要 sudo）
+
+带 --install 时会顺带做三件事（都可回滚，见 --install 的输出）:
+  1. 把主题装到 /usr/share/plymouth/themes/ii
+  2. 把 plymouth 默认主题指到 ii
+  3. 给 /etc/kernel/cmdline 补上 quiet splash（已备份原文件），然后 reinstall-kernels
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from string import Template
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+# ---------------------------------------------------------------- 路径
+
+HOME = Path.home()
+STATE_JSON = HOME / ".local/state/quickshell/user/generated/colors.json"
+LOGO_SVG = HOME / ".config/quickshell/ii/assets/icons/endeavouros-symbolic.svg"
+CACHE_DIR = HOME / ".cache/ii-plymouth"
+SYS_DIR = Path("/usr/share/plymouth/themes/ii")
+CMDLINE = Path("/etc/kernel/cmdline")
+
+# 启动日志浮层用的等宽字体。它要真的生效得同时满足两件事：
+#   ① 描述串能在「当前用户环境」下被 fc-match 解析出文件（JetBrainsMono
+#      Nerd Font 装在家目录 ~/.local/share/fonts 下，可以）；
+#   ② 解析出的文件在「root 环境」下也能被 fc-match 找到 —— **这一条不成立**：
+#      fontconfig 的 <dir prefix="xdg">fonts</dir> 和 ~/.fonts 都按 $HOME 展开，
+#      而 plymouth-populate-initrd 是 root 跑的，那两处指向 /root，于是搜不到
+#      用户字体、静默 fallback 成系统的 Noto Sans Mono（实测确认）。
+#   所以安装脚本会把解析出的字体文件复制到 MONO_FONT_DEST（系统目录），
+#   让 root 的 fc-match 认它。见 resolve_mono_font()。
+MONO_FONT_DESC = "JetBrainsMono Nerd Font 12"
+MONO_FONT_DEST = Path("/usr/local/share/fonts/ii-plymouth-mono.ttf")
+
+# ---------------------------------------------------------------- 布局
+
+# ★ 这份参数是 script 和 preview 共用的唯一事实来源 ——
+#   预览图和真机画面走的是同一套数字，不会出现"预览好看装上去跑偏"。
+#
+# ★ 所有长度都按「屏幕短边 short」算，不按屏宽 ——
+#   接着 HDMI 开机时 plymouth 的画布可能是两块屏拼起来的宽度，
+#   按屏宽算的进度条会被拉到屏外。短边基准对多显示器免疫。
+LAYOUT = {
+    "ring_size":   0.185,   # 环外径 = short * 0.185
+    "ring_cy":     0.455,   # 环中心 y = sh * 0.455
+    "ring_lw":     0.054,   # 线宽 = 环外径 * 0.054
+    "ring_radius": 0.317,   # 圆角半径 = 环外框 * 0.317（越大越接近正圆）
+    "logo_ratio":  0.390,   # 中央 logo = 环外径 * 0.390
+    "bar_total":   0.520,   # 进度条总宽 = short * 0.520
+    "bar_h":       0.0125,  # 进度条高   = short * 0.0125
+    #                         总宽:高 = 41.6:1，是个固定比例 ——
+    #                         底轨 PNG 就是按这个比例画的，运行时等比缩放，
+    #                         圆角不会被拉成椭圆（见 draw_track）。
+    "bar_cy":      0.635,   # 进度条中心 y = sh * 0.635
+    "text_cy":     0.684,   # 文字中心 y = sh * 0.684
+    "text_size":   0.019,   # 文字高 = short * 0.019
+}
+
+# 源图尺寸（都是显示尺寸的若干倍，plymouth 时用 Image.Scale 等比缩下去）
+RING_SRC = 512
+TEXT_PX = 88
+
+FONT_CANDIDATES = [
+    HOME / ".local/share/fonts/NotoSansCJK/NotoSansCJK-Regular.ttc",
+    Path("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/TTF/NotoSansCJK-Regular.ttc"),
+]
+
+
+# ---------------------------------------------------------------- 颜色工具
+
+def parse_color(v: str) -> tuple[int, int, int]:
+    """matugen 的 hex 有的带 # 有的不带，两种都吃。"""
+    h = str(v).strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        raise ValueError(f"颜色格式不认识: {v!r}")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))  # type: ignore[return-value]
+
+
+def shade(c: tuple[int, int, int], f: float) -> tuple[int, int, int]:
+    """整体系数调明暗（f<1 变暗，f>1 变亮）。"""
+    return tuple(max(0, min(255, round(v * f))) for v in c)  # type: ignore[return-value]
+
+
+def rgba(c: tuple[int, int, int], alpha: float) -> tuple[int, int, int, int]:
+    return (*c, max(0, min(255, round(alpha * 255))))
+
+
+def cfloat(c: tuple[int, int, int]) -> str:
+    """转成 plymouth script 要的 0..1 浮点三元组。"""
+    return ", ".join(f"{v / 255:.4f}" for v in c)
+
+
+# ---------------------------------------------------------------- 绘图
+
+def _ss(size: tuple[int, int], factor: int = 4) -> tuple[int, int]:
+    return (size[0] * factor, size[1] * factor)
+
+
+def draw_ring(color: tuple[int, int, int], size: int = RING_SRC) -> Image.Image:
+    """圆角方环（squircle outline）。
+
+    先用 4 倍超采样画，再 LANCZOS 缩回来 —— PIL 的 rounded_rectangle
+    在线宽和圆角半径上都只按像素算，直接画细环会有锯齿。
+    """
+    f = 4
+    W = H = size * f
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    inset = round(W * 0.031)                       # 环离画布边
+    lw = max(1, round(size * LAYOUT["ring_lw"] * f))
+    box = [inset, inset, W - inset - 1, H - inset - 1]
+    radius = round((box[2] - box[0]) * LAYOUT["ring_radius"])
+
+    d.rounded_rectangle(box, radius=radius, outline=rgba(color, 1.0), width=lw)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def draw_track(color, ratio: float, alpha: float = 0.22) -> Image.Image:
+    """进度条底轨：一整根胶囊。
+
+    宽高比写成参数、运行时按同一个比例等比缩放 —— 这是圆角不被拉扁的关键。
+    """
+    H = 40
+    W = round(H * ratio)
+    f = 2
+    img = Image.new("RGBA", (W * f, H * f), (0, 0, 0, 0))
+    ImageDraw.Draw(img).rounded_rectangle(
+        [0, 0, W * f - 1, H * f - 1], radius=H * f // 2, fill=rgba(color, alpha))
+    return img.resize((W, H), Image.LANCZOS)
+
+
+def draw_fill_cap(color, size: int = 128) -> Image.Image:
+    """填充条的左端圆角帽 —— 子弹头形状（左半圆 + 右半矩形）。
+
+    ★ 不用 rounded_rectangle(corners=...) 画：
+      radius 取到 S//2 又要只圆两个角时，PIL 内部那个矩形会退化成零高度
+      并抛 "y1 must be greater than or equal to y0"。半圆+矩形拼起来
+      更直接，而且圆角半径精确等于底轨的圆角，两者能严丝合缝。
+
+    正方形，运行时等比缩放到 (bar_h, bar_h) —— 同样不变形。
+    """
+    f = 4
+    S = size * f
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    ink = rgba(color, 1.0)
+    d.pieslice([0, 0, S - 1, S - 1], start=90, end=270, fill=ink)   # 90°→270° 顺时针 = 左半圆
+    d.rectangle([S // 2, 0, S - 1, S - 1], fill=ink)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def draw_fill_mid(color, size=(64, 64)) -> Image.Image:
+    """填充条的中段：一块纯矩形。
+
+    ★ 它是要被水平拉伸的（宽度 = 当前进度），而纯矩形怎么拉都不变样 ——
+      这就是不在 script 里缩放整根胶囊的原因：那会把圆角拉成椭圆。
+    """
+    return Image.new("RGBA", size, rgba(color, 1.0))
+
+
+def find_font() -> Path | None:
+    for p in FONT_CANDIDATES:
+        if p.is_file():
+            return p
+    try:
+        out = subprocess.run(["fc-match", "-f", "%{file}", "sans-serif:lang=zh-cn"],
+                             capture_output=True, text=True, timeout=5)
+        p = Path(out.stdout.strip())
+        if p.is_file():
+            return p
+    except Exception:
+        pass
+    return None
+
+
+def draw_text(text: str, color, alpha: float = 0.6) -> Image.Image | None:
+    """把文字预渲染成 PNG。
+
+    ★ 为什么不交给 plymouth 的 Image.Text() 现场画：
+      plymouthd 跑在 initramfs 里，那里的字体是 dracut 打进去的，
+      中文字体多半不在（dracut 的 plymouth 模块只带最小集）。
+      预渲染成图就完全绕开 initramfs 的字体问题。
+    """
+    font_path = find_font()
+    if not font_path:
+        return None
+
+    try:
+        font = ImageFont.truetype(str(font_path), TEXT_PX)
+    except Exception:
+        return None
+
+    tmp = Image.new("RGBA", (8, 8))
+    bbox = ImageDraw.Draw(tmp).textbbox((0, 0), text, font=font)
+    pad = 8
+    W = bbox[2] - bbox[0] + pad * 2
+    H = bbox[3] - bbox[1] + pad * 2
+
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(img).text((pad - bbox[0], pad - bbox[1]), text, font=font,
+                             fill=rgba(color, alpha))
+    return img
+
+
+def render_logo(color, size: int = RING_SRC) -> Image.Image | None:
+    """把 EndeavourOS 的 symbolic SVG 染成主题色。
+
+    symbolic 图标是单色路径（黑填充 + 透明底），所以拿 alpha 当蒙版上色；
+    万一转出来的图不透明（有底色），就退回用亮度反相当蒙版。
+    """
+    if not LOGO_SVG.is_file():
+        return None
+    try:
+        raw = subprocess.run(
+            ["rsvg-convert", "-w", "1024", "-h", "1024", str(LOGO_SVG)],
+            capture_output=True, timeout=20,
+        )
+        if raw.returncode != 0 or not raw.stdout:
+            return None
+        import io
+        src = Image.open(io.BytesIO(raw.stdout)).convert("RGBA")
+    except Exception:
+        return None
+
+    alpha = src.split()[3]
+    mask = alpha if alpha.getextrema()[0] < 250 else ImageOps.invert(src.convert("L"))
+
+    out = Image.new("RGBA", src.size, (*color, 0))
+    out.putalpha(mask)
+    return out.resize((size, size), Image.LANCZOS)
+
+
+# ---------------------------------------------------------------- script 模板
+
+# 文字块单独成模板：不带文字时整块不生成，
+# 免得在 script 里留下一个 Image("text.png") 去引用不存在的文件
+TEXT_BLOCK_TMPL = Template("""\
+text.src = Image("text.png");
+text.h = Math.Int(short * $TEXT_SIZE);
+text.w = Math.Int(text.h * text.src.GetWidth() / text.src.GetHeight());
+text.img = text.src.Scale(text.w, text.h);
+text.sprite = Sprite(text.img);
+text.sprite.SetPosition(Math.Int(Window.GetX() + sw / 2 - text.w / 2),
+                        Math.Int(Window.GetY() + sh * $TEXT_CY - text.h / 2), 30);""")
+
+SCRIPT_TMPL = Template("""\
+# ============================================================
+#  ii —— plymouth 开机主题（由 plymouth-ii-theme 生成，别手改）
+#  配色源: ~/.local/state/quickshell/user/generated/colors.json
+#  几何参数与生成器里的 LAYOUT 一一对应
+# ============================================================
+
+Window.SetBackgroundTopColor($BG_TOP);
+Window.SetBackgroundBottomColor($BG_BOTTOM);
+
+# ---------- 尺寸 ----------
+sw = Window.GetWidth();
+sh = Window.GetHeight();
+short = sw;
+if (sh < short) short = sh;
+
+# ---------- 脉冲圆角方环 ----------
+ring.src = Image("ring.png");
+ring.size = Math.Int(short * $RING_SIZE);
+ring.img = ring.src.Scale(ring.size, ring.size);
+ring.sprite = Sprite(ring.img);
+ring.cx = Window.GetX() + sw / 2;
+ring.cy = Window.GetY() + sh * $RING_CY;
+ring.sprite.SetPosition(Math.Int(ring.cx - ring.size / 2),
+                        Math.Int(ring.cy - ring.size / 2), 10);
+
+# ---------- 中央 logo ----------
+logo.src = Image("logo.png");
+logo.size = Math.Int(ring.size * $LOGO_RATIO);
+logo.img = logo.src.Scale(logo.size, logo.size);
+logo.sprite = Sprite(logo.img);
+logo.sprite.SetPosition(Math.Int(ring.cx - logo.size / 2),
+                        Math.Int(ring.cy - logo.size / 2), 20);
+
+# ---------- 连续进度条 ----------
+# 结构 = 底轨(整根胶囊) + 填充(左端圆角帽 + 可拉伸的中段矩形)
+# 中段之所以用纯矩形：Image.Scale 是各向异性的，缩放整根胶囊会把圆角
+# 拉成椭圆；纯矩形怎么拉都不会变样。
+bar.w = Math.Int(short * $BAR_TOTAL);
+bar.h = Math.Int(short * $BAR_H);
+bar_x0 = Math.Int(Window.GetX() + sw / 2 - bar.w / 2);
+bar_y  = Math.Int(Window.GetY() + sh * $BAR_CY - bar.h / 2);
+
+bar.track = Image("track.png").Scale(bar.w, bar.h);
+bar.track_sprite = Sprite(bar.track);
+bar.track_sprite.SetPosition(bar_x0, bar_y, 30);
+
+bar.cap = Image("fill_cap.png").Scale(bar.h, bar.h);
+bar.cap_sprite = Sprite(bar.cap);
+bar.cap_sprite.SetPosition(bar_x0, bar_y, 31);
+
+bar.mid_src = Image("fill_mid.png");
+bar.mid = bar.mid_src.Scale(bar.h, bar.h);
+bar.mid_sprite = Sprite(bar.mid);
+bar.mid_sprite.SetPosition(bar_x0 + bar.h, bar_y, 31);
+bar.mid_sprite.SetOpacity(0);
+
+fun set_progress (p)
+  {
+    if (p < 0) p = 0;
+    if (p > 1) p = 1;
+    lit = Math.Int(bar.w * p);
+
+    if (lit < 1)
+      {
+        bar.cap_sprite.SetOpacity(0);
+        bar.mid_sprite.SetOpacity(0);
+        return;
+      }
+    bar.cap_sprite.SetOpacity(1);
+
+    rest = lit - bar.h;
+    if (rest < 1)
+      {
+        bar.mid_sprite.SetOpacity(0);
+      }
+    else
+      {
+        bar.mid_sprite.SetOpacity(1);
+        bar.mid = bar.mid_src.Scale(rest, bar.h);
+        bar.mid_sprite.SetImage(bar.mid);
+      }
+  }
+
+fun progress_callback (duration, progress)
+  {
+    set_progress(progress);
+  }
+
+Plymouth.SetBootProgressFunction(progress_callback);
+
+# ---------- 文字 ----------
+$TEXT_BLOCK
+
+# ---------- 动画 ----------
+# ★ 这个回调刻意「不声明参数」：
+#   Plymouth 的 SetRefreshFunction 是否把时间戳传进来在各版本上并不一致，
+#   官方示例 script.script 和 breeze 都是无参写法。读一个没传进来的参数
+#   可能让整个回调失败 —— 而回调一失败屏幕就再也不刷新了，风险太大。
+#   所以改用固定步进自己累加：breeze 的注释说该回调每秒最多调 50 次，
+#   取 1/50 秒做步长，帧率精确时周期就是准的，帧率低一点只是脉冲变慢，
+#   不影响观感也不影响功能。
+pulse.t = 0;
+pulse.frame = 0;
+
+fun refresh_callback ()
+  {
+    # ★ NVIDIA 上的已知坑（照抄 breeze 主题的防御）：
+    #   用 script 主题时首次背景绘制可能太早，结果背景根本没画出来。
+    #   在第一次 refresh 回调里补一次 ApplyBackgroundColors 兜底。
+    if (!global.bg_applied)
+      {
+        global.bg_applied = 1;
+        Window.ApplyBackgroundColors();
+      }
+
+    pulse.t += 0.020;
+    pulse.frame++;
+    if (pulse.frame < 2) return;   # 头两帧先让位给背景补画
+
+    # 周期约 2.6 秒的正弦脉冲：不透明度 0.30 → 1.00
+    op = 0.30 + 0.70 * ((Math.Cos(pulse.t * 2.4166) + 1) / 2);
+    ring.sprite.SetOpacity(op);
+
+    # logo 比环稳一些，环暗下去时它是视觉焦点
+    logo.sprite.SetOpacity(0.55 + 0.45 * op);
+  }
+
+# ★ 没有 refresh 函数 plymouth 就不会重绘屏幕（breeze 原话）
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# ---------- 退出 ----------
+fun quit_callback ()
+  {
+    ring.sprite.SetOpacity(1);
+    logo.sprite.SetOpacity(1);
+    set_progress(1);
+  }
+
+Plymouth.SetQuitFunction(quit_callback);
+
+# 启动过程中 systemd 报错误时，plymouth 会隐藏主题切到 details 视图；
+# 这里让它照旧显示主题（否则一出错整个开机画面就没了）。
+fun display_normal_callback ()
+  {
+  }
+
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+
+# ---------- 密码输入（加密盘 / fsck 修复时才会用到）----------
+# 没有这个回调的话，需要输密码时屏幕是空的，只能盲打。
+# ★ 先把这个表建出来再让回调碰它：script 里访问未定义表的成员会报错，
+#   breeze 是靠先调一次 dialog_setup() 绕开的，这里直接初始化更直白。
+pass.bullet = [];
+pass.made = 0;
+
+fun display_password_callback (prompt, bullets)
+  {
+    # 只多不少：先按需造新圆点，再造完后再统一按 bullets 收放。
+    # ★ 收放这一步必须遍历「造过的全部圆点」而不是「直到第一个没造过的」——
+    #   否则退格（bullets 变少）时多出来的圆点会永远留在屏幕上。
+    for (i = pass.made; i < bullets; i++)
+      {
+        pass.bullet[i] = Sprite(bar.cap);
+        pass.bullet[i].SetPosition(Math.Int(bar_x0 + i * bar.h * 1.4), bar_y, 40);
+        pass.made = i + 1;
+      }
+    for (i = 0; i < pass.made; i++)
+      {
+        if (i < bullets) pass.bullet[i].SetOpacity(1);
+        else             pass.bullet[i].SetOpacity(0);
+      }
+  }
+
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+""")
+
+PLYMOUTH_TMPL = Template("""\
+[Plymouth Theme]
+Name=ii
+Description=跟随主题切换器的开机画面
+# ★ ModuleName 这一行是必须的，删了整套主题会在开机时静默失效。
+#   dracut 的 plymouth 打包脚本 plymouth-populate-initrd 靠它决定要把哪个
+#   插件 .so 装进 initramfs（第 549 行 grep 这一行 → 第 586 行 inst 那个
+#   名字加 .so）。名字为空就会去装 ".so"，那个文件不存在，于是第 583 行
+#   直接 exit 1 —— 而 dracut 是以 2>/dev/null 调它的，报错被吞掉，
+#   你只会看到「rebuild 好像成功了，开机却没变化」。
+#   （顺带：本段在 string.Template 里，注释里也别写美元符号。）
+ModuleName=script
+
+[script]
+ImageDir=$SYS_DIR
+ScriptFile=$SYS_DIR/ii.script
+
+# ---- 启动日志浮层（按 Esc 开关）----
+# 机制：plymouth 会接管 /dev/console，把 systemd 状态行和内核 printk 全截
+# 下来（不是丢掉），用插件里的终端模拟器逐行画在主题最上层。默认不显示，
+# 按 Esc 切换显示 / 隐藏。
+#   依据 script 插件 plugin.c:628-634 —— console viewer 可用时 Esc 会被插件
+#   自己吃掉（validate_input 返回 false），所以不会切到丑的 details 兜底主
+#   题，而是在 ii 主题上叠加这层日志。这正是「把启动日志包装起来」的做法。
+#   默认值 should_show_console_messages=false 见 script-lib-sprite.c:727。
+# 字体：plymouth-populate-initrd 会 grep 本文件的字体键，再用 fc-match 找到
+# 对应文件打进 initramfs。注意它是以 root 跑的 —— 用户目录里的字体它搜不到
+# （见生成器里 resolve_mono_font 的说明），所以安装脚本会先把字体复制到
+# /usr/local/share/fonts/。这里刻意不在注释里写那个键名，免得被 grep 抓错行。
+MonospaceFont=$MONO_FONT
+
+# ★ 颜色格式是 0xRRGGBBAA —— 红在前、透明度在最后。
+#   这里有个很阴的便利规则（ply-pixel-buffer.c:619-622）：
+#       if ((hex_color & 0xff000000) == 0) hex_color = (hex_color << 8) | 0xff;
+#   判定条件是「红色通道为 0」而不是「alpha 为 0」。于是任何 R=00 的颜色
+#   都会被静默左移 8 位变成别的东西（0x001111CC 会变成不透明蓝 0x1111CCFF，
+#   连默认值 0x00000000 实际都被解释成不透明黑）。选色时避开 R=00 即可。
+ConsoleLogTextColor=0xFFFFFFE6
+ConsoleLogBackgroundColor=0x121314CC
+""")
+
+
+# ---------------------------------------------------------------- 生成
+
+def load_colors(path: Path) -> dict:
+    if not path.is_file():
+        sys.exit(f"找不到配色文件: {path}\n"
+                 f"（主题切换器套一次主题就会有；或者用 --colors 指定一份）")
+    return json.loads(path.read_text())
+
+
+def gen(out: Path, colors_path: Path, with_logo: bool, with_text: bool) -> dict:
+    C = load_colors(colors_path)
+
+    def col(key, fallback=None):
+        v = C.get(key) or (C.get(fallback) if fallback else None)
+        if v is None:
+            sys.exit(f"配色文件里没有 {key!r}（{colors_path}）")
+        return parse_color(v)
+
+    surface = col("surface", "background")
+    primary = col("primary")
+    on_variant = col("on_surface_variant", "on_surface")
+
+    # 背景：surface 轻微偏向 primary 一点点（3%），再向下压暗 ——
+    # 纯平色在大片深色里会显得"死"，这点渐变是质感来源
+    bg_top = mix(surface, primary, 0.035)
+    bg_bottom = shade(surface, 0.42)
+
+    out.mkdir(parents=True, exist_ok=True)
+    for stale in out.glob("*.png"):
+        stale.unlink()
+
+    bar_ratio = LAYOUT["bar_total"] / LAYOUT["bar_h"]
+
+    draw_ring(primary).save(out / "ring.png")
+    draw_track(primary, bar_ratio, alpha=0.22).save(out / "track.png")
+    draw_fill_cap(primary).save(out / "fill_cap.png")
+    draw_fill_mid(primary).save(out / "fill_mid.png")
+
+    logo = render_logo(primary) if with_logo else None
+    if logo is None:
+        # 没有 logo 就画一个圆角小方块顶上，环心不至于空着
+        side = 160
+        img = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        ImageDraw.Draw(img).rounded_rectangle(
+            [0, 0, side - 1, side - 1], radius=round(side * 0.30), fill=rgba(primary, 1.0))
+        logo = img
+    logo.save(out / "logo.png")
+
+    text_img = draw_text("载入系统中…", on_variant, 0.55) if with_text else None
+    if text_img is not None:
+        text_img.save(out / "text.png")
+        text_block = TEXT_BLOCK_TMPL.substitute(
+            TEXT_SIZE=f"{LAYOUT['text_size']:g}",
+            TEXT_CY=f"{LAYOUT['text_cy']:g}")
+    else:
+        text_block = "# （本次生成不含文字）"
+
+    script = SCRIPT_TMPL.substitute(
+        BG_TOP=cfloat(bg_top),
+        BG_BOTTOM=cfloat(bg_bottom),
+        RING_SIZE=f"{LAYOUT['ring_size']:g}",
+        RING_CY=f"{LAYOUT['ring_cy']:g}",
+        LOGO_RATIO=f"{LAYOUT['logo_ratio']:g}",
+        BAR_TOTAL=f"{LAYOUT['bar_total']:g}",
+        BAR_H=f"{LAYOUT['bar_h']:g}",
+        BAR_CY=f"{LAYOUT['bar_cy']:g}",
+        TEXT_BLOCK=text_block,
+    )
+    (out / "ii.script").write_text(script)
+    (out / "ii.plymouth").write_text(
+        PLYMOUTH_TMPL.substitute(SYS_DIR=SYS_DIR, MONO_FONT=MONO_FONT_DESC))
+
+    return {"colors": C, "primary": primary, "surface": surface,
+            "bg_top": bg_top, "bg_bottom": bg_bottom, "out": out}
+
+
+def make_preview(info: dict, sw: int = 2560, sh: int = 1440) -> Path:
+    """按 LAYOUT 合成一张真机尺寸的模拟图（和 script 里是同一套数字）。"""
+    out: Path = info["out"]
+    short = min(sw, sh)
+    img = Image.new("RGB", (sw, sh), info["bg_top"])
+
+    # 背景垂直渐变
+    top, bot = info["bg_top"], info["bg_bottom"]
+    grad = Image.new("RGB", (1, sh))
+    for y in range(sh):
+        grad.putpixel((0, y), mix(top, bot, y / max(1, sh - 1)))
+    img = grad.resize((sw, sh), Image.BILINEAR)
+
+    ring_size = round(short * LAYOUT["ring_size"])
+    cx, cy = sw // 2, round(sh * LAYOUT["ring_cy"])
+
+    ring = Image.open(out / "ring.png").resize((ring_size, ring_size), Image.LANCZOS)
+    img.paste(ring, (cx - ring_size // 2, cy - ring_size // 2), ring)
+
+    logo_size = round(ring_size * LAYOUT["logo_ratio"])
+    logo = Image.open(out / "logo.png").resize((logo_size, logo_size), Image.LANCZOS)
+    img.paste(logo, (cx - logo_size // 2, cy - logo_size // 2), logo)
+
+    bw = round(short * LAYOUT["bar_total"])
+    bh = round(short * LAYOUT["bar_h"])
+    x0 = sw // 2 - bw // 2
+    by = round(sh * LAYOUT["bar_cy"] - bh / 2)
+
+    track = Image.open(out / "track.png").resize((bw, bh), Image.LANCZOS)
+    img.paste(track, (x0, by), track)
+
+    lit_w = round(bw * 0.62)                  # 假装进度 62%
+    cap = Image.open(out / "fill_cap.png").resize((bh, bh), Image.LANCZOS)
+    img.paste(cap, (x0, by), cap)
+    rest = lit_w - bh
+    if rest > 0:
+        mid = Image.new("RGBA", (rest, bh), (*info["primary"], 255))
+        img.paste(mid, (x0 + bh, by), mid)
+
+    txt_path = out / "text.png"
+    if txt_path.is_file():
+        txt = Image.open(txt_path)
+        th = round(short * LAYOUT["text_size"])
+        tw = round(th * txt.width / txt.height)
+        txt = txt.resize((tw, th), Image.LANCZOS)
+        ty = round(sh * LAYOUT["text_cy"] - th / 2)
+        img.paste(txt, (sw // 2 - tw // 2, ty), txt)
+
+    p = out / "preview.png"
+    img.save(p)
+    return p
+
+
+# ---------------------------------------------------------------- 安装
+
+INSTALL_SH = r"""set -eu
+
+echo "── 1/5  安装主题文件"
+install -d -m755 "@@SYS_DIR@@"
+install -m644 @@FILES@@ "@@SYS_DIR@@"/
+
+echo "── 2/5  把日志浮层的字体装进系统目录"
+# plymouth-populate-initrd 是 root 执行的，它的 fc-match 只看 /usr/share/fonts
+# 和 /usr/local/share/fonts。本机的 JetBrainsMono Nerd Font 在用户目录下
+# （fontconfig 的 <dir prefix="xdg"> 对 root 展开成 /root/.local/share/fonts），
+# 搜不到就会静默 fallback 成 Noto Sans Mono 打进 initramfs。复制一份到系统
+# 目录即可；改个名字是为了不跟字体包的路径打架（字体内部的族名不变）。
+if [ -f "@@FONT_SRC@@" ]; then
+    install -Dm644 "@@FONT_SRC@@" "@@FONT_DEST@@"
+    fc-cache -f "$(dirname "@@FONT_DEST@@")" >/dev/null 2>&1 || true
+    echo "   @@FONT_SRC@@"
+    echo "   → @@FONT_DEST@@"
+else
+    echo "   （没解析到字体文件，浮层会用系统默认等宽字体；不影响主题本身）"
+fi
+
+echo "── 3/5  把 plymouth 默认主题指到 ii"
+plymouth-set-default-theme ii
+
+echo "── 4/5  给内核命令行补 quiet splash loglevel=3 ..."
+# ★ quiet 绝对不能单独用。本机内核编译时 CONFIG_CONSOLE_LOGLEVEL_QUIET=1，
+#   也就是 quiet 等价于 loglevel=1 —— 只剩 KERN_EMERG，连 ACPI 的 KERN_ERR
+#   都一起吞掉（这正是「修好 ACPI 刷屏后连报错都看不见了」的坑）。
+#   loglevel=3 保留 ERR 及以上，quiet 与它同段、后写的赢，所以必须排在后面。
+#   另两个：vt.global_cursor_default=0 去掉 VT 上闪烁的方块光标；
+#         rd.udev.log_level=3 让 initramfs 里的 udev 也安静。
+if [ ! -f "@@CMDLINE@@.bak" ]; then
+    cp -a "@@CMDLINE@@" "@@CMDLINE@@.bak"
+    echo "   已备份原命令行 → @@CMDLINE@@.bak"
+fi
+CUR="$(cat "@@CMDLINE@@")"
+NEW="$CUR"
+for t in quiet splash loglevel=3 vt.global_cursor_default=0 rd.udev.log_level=3; do
+    case " $NEW " in *" $t "*) ;; *) NEW="$NEW $t" ;; esac
+done
+if [ "$NEW" != "$CUR" ]; then
+    printf '%s\n' "$NEW" > "@@CMDLINE@@"
+    echo "   旧: $CUR"
+    echo "   新: $NEW"
+else
+    echo "   已经有 quiet splash，不动"
+fi
+
+echo "── 5/5  重建 initramfs + 更新启动项（要一会儿）"
+reinstall-kernels
+
+echo
+echo "✓ 完成。重启即可看到新开机画面。"
+"""
+
+RECOVER = """
+回滚（任何一步出问题都能单独退）:
+  开机画面  : sudo plymouth-set-default-theme bgrt && sudo reinstall-kernels
+  内核命令行: sudo cp /etc/kernel/cmdline.bak /etc/kernel/cmdline && sudo reinstall-kernels
+  删主题    : sudo rm -rf /usr/share/plymouth/themes/ii
+  只想要日志: 开机时在 systemd-boot 菜单按 e，删掉 quiet splash 即可临时恢复
+"""
+
+
+def resolve_mono_font() -> str:
+    """把 MONO_FONT_DESC 解析成字体文件路径 —— 必须在**当前用户**环境下解析。
+
+    这里只在用户环境里拿到「哪个文件」，真正的坑在 root 那边：安装脚本要用
+    的是 root 的 fc-match（见 MONO_FONT_DESC 上方的说明）。解析不到就返回
+    空串，安装脚本会退化成「浮层用系统默认等宽字体」，主题本身不受影响。
+    """
+    try:
+        r = subprocess.run(["fc-match", "-f", "%{file}", MONO_FONT_DESC],
+                           capture_output=True, text=True, timeout=10)
+        p = r.stdout.strip()
+        return p if p and Path(p).is_file() else ""
+    except Exception:
+        return ""
+
+
+def render_install_sh(out: Path) -> str:
+    """渲染出安装脚本的最终内容（所有路径占位符都替换掉）。"""
+    # 装哪些文件：目录里的素材（preview.png 只是给人看的，不装）
+    names = sorted(p.name for p in out.iterdir()
+                   if p.is_file() and p.suffix in (".png", ".script", ".plymouth")
+                   and p.name != "preview.png")
+    files = " ".join(f'"{out}/{n}"' for n in names)
+    sh = INSTALL_SH
+    for mark, val in (("@@SYS_DIR@@", SYS_DIR), ("@@FILES@@", files),
+                      ("@@CMDLINE@@", CMDLINE),
+                      ("@@FONT_SRC@@", resolve_mono_font()),
+                      ("@@FONT_DEST@@", MONO_FONT_DEST)):
+        sh = sh.replace(mark, str(val))
+    return sh
+
+
+def do_install(info: dict) -> None:
+    out: Path = info["out"]
+    sh = render_install_sh(out)
+
+    tmpsh = Path(tempfile.mkstemp(prefix="plymouth-ii-", suffix=".sh")[1])
+    tmpsh.write_text(sh)
+    tmpsh.chmod(0o755)
+
+    # ★ 先让 bash 自己验一遍语法，语法错就别拿去 sudo 跑了。
+    #   （模板里混着 Python 占位符和 shell 变量，很容易在替换上翻车：
+    #     换成 @@XXX@@ 标记 + replace 就是为了避免 $CUR/$NEW 这类
+    #     shell 变量被模板引擎当成占位符。）
+    chk = subprocess.run(["bash", "-n", str(tmpsh)], capture_output=True, text=True)
+    if chk.returncode != 0:
+        tmpsh.unlink(missing_ok=True)
+        sys.exit(f"✗ 安装脚本语法没过（本工具的 bug，别硬跑）:\n{chk.stderr}")
+
+    print("\n▸ 需要 root 权限（会提示输一次密码）\n")
+    try:
+        rc = subprocess.run(["sudo", "bash", str(tmpsh)]).returncode
+    finally:
+        tmpsh.unlink(missing_ok=True)
+    if rc != 0:
+        sys.exit(f"\n✗ 安装中断（退出码 {rc}）{RECOVER}")
+    print(RECOVER)
+
+
+# ---------------------------------------------------------------- main
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="生成/安装「ii」plymouth 开机主题",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=RECOVER)
+    ap.add_argument("--gen", action="store_true", help="只生成到 ~/.cache/ii-plymouth")
+    ap.add_argument("--preview", action="store_true", help="生成并出一张模拟图")
+    ap.add_argument("--install", action="store_true", help="生成 + 装进系统 + 重建 initramfs")
+    ap.add_argument("--colors", type=Path, default=STATE_JSON,
+                    help=f"配色 JSON（默认 {STATE_JSON}）")
+    ap.add_argument("--out", type=Path, default=CACHE_DIR, help="生成目录")
+    ap.add_argument("--no-logo", action="store_true", help="不要中央 logo")
+    ap.add_argument("--no-text", action="store_true", help="不要「载入系统中…」")
+    ap.add_argument("--print-install", action="store_true",
+                    help="只打印安装脚本（即 --install 会以 root 跑的那些命令），不执行")
+    args = ap.parse_args()
+
+    info = gen(args.out, args.colors, not args.no_logo, not args.no_text)
+
+    if args.print_install:
+        print(render_install_sh(info["out"]))
+        return
+
+    print(f"配色源 : {args.colors}")
+    print(f"主色   : #{''.join(f'{v:02x}' for v in info['primary'])}"
+          f"   背景: #{''.join(f'{v:02x}' for v in info['surface'])}")
+    print(f"生成到 : {info['out']}")
+
+    if args.preview or not (args.install or args.gen):
+        p = make_preview(info)
+        print(f"预览图 : {p}")
+
+    if args.install:
+        do_install(info)
+
+
+if __name__ == "__main__":
+    main()

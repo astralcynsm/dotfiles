@@ -1,0 +1,46 @@
+# ════════════════════════════════════════════════════════════════════════════
+# machine/work/profile.toml —— 工作机摸底表（阶段 1 用）
+#
+# 空着的值 = 还没实测。填完就是这台机器的"身份证"，后面所有阶段都参考它。
+# 别猜：显示器、驱动、残留这三样全要命令输出的原文，不要印象。
+# ════════════════════════════════════════════════════════════════════════════
+
+[machine]
+hostname   = ""            # hostname
+os         = "Fedora Workstation 44"
+kernel     = ""            # uname -r
+cpu        = "i9-13900KF"
+gpu        = "RTX 3050"    # 独显，无核显输出
+session    = ""            # 当前登录会话（GNOME/Wayland）
+surveyed   = ""            # 摸底日期 YYYY-MM-DD
+
+[machine.gpu_driver]
+# 实测: nvidia-smi 首行 / lsmod | grep -E 'nvidia|nouveau'
+driver     = ""            # 期望 nvidia 专有（RPM Fusion akmod-nvidia）
+package    = ""            # dnf list installed 'akmod-nvidia' 'xorg-x11-drv-nvidia*'
+version    = ""            # nvidia-smi --query-gpu=driver_version --format=csv,noheader
+
+[[machine.monitors]]
+# 实测: 进 Hyprland 后 hyprctl monitors；或 GNOME 下 wlr-randr / gnome-randr
+# 每条显示器一个 [[machine.monitors]] 块，照抄命令输出
+name       = ""            # 例如 DP-1 / HDMI-A-1
+make_model = ""            # hyprctl monitors 里的 "Make: ... Model: ..."
+resolution = ""            # 例如 2560x1440
+refresh    = ""            # 例如 165.00
+scale      = ""            # 期望 1
+position   = ""            # 摆位，例如 0x0
+
+[machine.leftover]
+# 实测: 试装 Hyprland 的残留 —— 装之前必须清，见 MIGRATION.md P1
+copr       = ""            # dnf copr list（有没有 sdegler/hyprland 等）
+hypr_config = ""           # ls -la ~/.config/hypr（有没有旧配置/旧 .conf）
+packages   = ""            # rpm -qa | grep -i hypr
+other      = ""
+
+[machine.storage]
+# 实测: lsblk -f / findmnt —— 只记会被配置引用的挂载点
+mounts     = []            # 例如 ["/mnt/Storage"]
+obsidian   = ""            # Obsidian 库路径（vaults.json 要用）
+
+[notes]
+# 摸底时发现的任何"和文档说的不一样"，写在这

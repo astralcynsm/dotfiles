@@ -1,0 +1,67 @@
+# 由 matugen 生成，请勿手改
+# 模板源: ~/.config/matugen/templates/ghostty/dark
+#
+# ★ ghostty 的 theme 文件是**单模式**的（不像 foot 有 [colors-dark]/[colors-light] 段），
+#   所以明暗必须分成两个模板、两个产物。本文件是深色那一份。
+#   浅色那一份见同目录的 light。
+#
+# ★ 本文件不会自动生效。ghostty 真正读的是 active-theme：
+#     matugen 配色: cp themes/matugen-dark  active-theme
+#     固定配色:     cp themes/matugen-light active-theme
+#   正常由 ~/.config/theme-switcher/switch.sh 的 sync_ghostty_matugen() 按
+#   当前主题的明暗自动完成，不需要手工 cp。
+#
+# ⚠⚠ 绝对不要在这里写行尾注释。ghostty 只把**行首**的 # 当注释。
+#
+#   实测（Ghostty 1.3.1-arch2，2026-10-08）：
+#     源文件:  palette = 0=#1f1f28  # black
+#     解析后:  该行**整个消失** —— 不是值被污染，是整行被丢弃。
+#     而且 `ghostty +show-config` 退出码 0、stderr 一个字都没有。
+#
+#   也就是说这是个**完全静默**的失败：配色少一项，你不会收到任何提示，
+#   只会在某天发现终端里某类文字颜色不对。
+#
+#   这是从 foot 模板翻译过来时最容易踩的一脚 —— foot 的 ini 允许行尾注释，
+#   templates/foot/foot_theme.ini 里就满篇都是（`regular0=...  # black`）。
+#   照抄过来就中招。本目录的两份模板已全部改成注释另起一行。
+#
+#   验证手段（改完模板务必跑一次）：
+#     XDG_CONFIG_HOME=/tmp/xxx ghostty +show-config --changes-only | grep '^palette = 0='
+#
+# ⚠ background-opacity 刻意与 foot 的 alpha= 无关。
+#   foot 的 alpha 是叠在背景色上的 alpha 通道；ghostty 的 background-opacity
+#   是独立的乘数，两者不等价。这里取的是用户手工维护的 ghostty 深色主题里
+#   那个值（themes/dark = 0.7），保证和现状视觉一致。想改就改这一行。
+
+background = #{{colors.surface.dark.hex_stripped}}
+foreground = #{{colors.on_surface.dark.hex_stripped}}
+background-opacity = 0.7
+
+# 选中文本
+selection-background = #{{colors.primary_container.dark.hex_stripped}}
+selection-foreground = #{{colors.on_primary_container.dark.hex_stripped}}
+
+# 光标
+cursor-color = #{{colors.primary.dark.hex_stripped}}
+cursor-text = #{{colors.surface.dark.hex_stripped}}
+
+# --- Normal colors (palette 0-7) ---
+# 配色语义逐条对齐 foot 模板 templates/foot/foot_theme.ini，两个终端观感一致
+palette = 0=#{{colors.surface_container_highest.dark.hex_stripped}}
+palette = 1=#{{colors.error.dark.hex_stripped}}
+palette = 2=#{{colors.primary_fixed_dim.dark.hex_stripped}}
+palette = 3=#{{colors.tertiary_fixed_dim.dark.hex_stripped}}
+palette = 4=#{{colors.primary.dark.hex_stripped}}
+palette = 5=#{{colors.secondary.dark.hex_stripped}}
+palette = 6=#{{colors.tertiary.dark.hex_stripped}}
+palette = 7=#{{colors.on_surface_variant.dark.hex_stripped}}
+
+# --- Bright colors (palette 8-15) ---
+palette = 8=#{{colors.outline.dark.hex_stripped}}
+palette = 9=#{{colors.error.dark.hex_stripped}}
+palette = 10=#{{colors.primary_fixed.dark.hex_stripped}}
+palette = 11=#{{colors.tertiary_fixed.dark.hex_stripped}}
+palette = 12=#{{colors.primary_fixed.dark.hex_stripped}}
+palette = 13=#{{colors.secondary_fixed.dark.hex_stripped}}
+palette = 14=#{{colors.tertiary_fixed.dark.hex_stripped}}
+palette = 15=#{{colors.on_surface.dark.hex_stripped}}

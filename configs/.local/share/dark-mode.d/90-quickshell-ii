@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+# Disabled: restored original darkman flow (20-gtk-theme, etc.).
+exit 0

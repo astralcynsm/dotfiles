@@ -1,0 +1,24 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- 工作机显示器配置 —— ⚠️ 骨架，P1 实测后填真值
+--
+-- 由 machine/primary/ 的 monitors.conf 时代转换过来（Hyprland >= 0.55 用 Lua）：
+--   monitor=OUTPUT,MODE,POSITION,SCALE
+--     → hl.monitor({ output=..., mode=..., position=..., scale=... })
+--
+-- 拿真值的最稳路径：进 Hyprland → nwg-displays 摆好 → Apply
+--   → 它生成的文件里 hl.monitor({...}) 就是答案，照抄到这里。
+--
+-- ⚠️ 不要删本文件：machine.lua require 它，缺了 Hyprland 起不来。
+--    本文件为空（只有注释）是**合法状态** —— Hyprland 会自动配置检测到的显示器。
+--
+-- 示例（工作机真值待填；某台 2560x1440@165 的主屏大致长这样）：
+--
+-- hl.monitor({
+--     output   = "DP-1",
+--     mode     = "2560x1440@165",
+--     position = "0x0",
+--     scale    = 1,
+-- })
+--
+-- 想查当前显示器名：hyprctl monitors（或 GNOME 会话里 wlr-randr）
+-- ════════════════════════════════════════════════════════════════════════════

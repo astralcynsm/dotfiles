@@ -1,0 +1,61 @@
+/* ---- 由 matugen 生成，请勿手改 ---- */
+/* 模板源: ~/.config/matugen/templates/rofi/colors-rofi.rasi
+ * 输出:   ~/.config/rofi/wallust/colors-rofi.rasi
+ *
+ * 为什么输出还在 wallust/ 目录下：
+ *   13 个 KooL 主题里写死了 `@theme "~/.config/rofi/wallust/colors-rofi.rasi"`，
+ *   换路径要动 13 个文件，不划算。颜色来源早就不是 wallust 了
+ *   （wallust 已废弃，matugen 全接管），目录名纯属历史遗留。
+ *
+ * 为什么一个文件就够：
+ *   用 `.default` 而不是 `.dark`/`.light`，它会跟随 matugen 的 --mode。
+ *   switch.sh 里是 `matugen image "$wall" --mode "$mode"`，所以切明暗会自动重生成。
+ *
+ * 配色取舍和 fcitx5 候选框保持一致：强调色用 secondary 不用 primary
+ *   —— Material You 在 dark 下把 primary 做得高饱和，大面积用会"发荧光"。
+ *   选中项用 primary_container / on_primary_container 那一组（本来就是为容器色设计的）。
+ */
+
+* {
+    /* —— 选中项 —— */
+    active-background:          {{colors.primary_container.default.hex}};
+    active-foreground:          {{colors.on_primary_container.default.hex}};
+    selected-active-background: {{colors.primary_container.default.hex}};
+    selected-active-foreground: {{colors.on_primary_container.default.hex}};
+    selected-normal-background: {{colors.primary_container.default.hex}};
+    selected-normal-foreground: {{colors.on_primary_container.default.hex}};
+
+    /* —— 普通项 —— */
+    normal-background:          {{colors.surface.default.hex}};
+    normal-foreground:          {{colors.on_surface.default.hex}};
+
+    /* —— 紧急 / 错误 —— */
+    urgent-background:          {{colors.error_container.default.hex}};
+    urgent-foreground:          {{colors.on_error_container.default.hex}};
+    selected-urgent-background: {{colors.error_container.default.hex}};
+    selected-urgent-foreground: {{colors.on_error_container.default.hex}};
+
+    /* —— 交替行 —— */
+    alternate-active-background: {{colors.secondary_container.default.hex}};
+    alternate-active-foreground: {{colors.on_secondary_container.default.hex}};
+    alternate-normal-background: {{colors.surface_container.default.hex}};
+    alternate-normal-foreground: {{colors.on_surface.default.hex}};
+    alternate-urgent-background: {{colors.error_container.default.hex}};
+    alternate-urgent-foreground: {{colors.on_error_container.default.hex}};
+
+    /* —— 窗口 —— */
+    background-color: {{colors.surface.default.hex}};
+    /* 半透明底（原来是 rgba(0,0,0,0.7) 的纯黑，现在换成跟随壁纸的 surface，不透明度略提高） */
+    background: rgba({{colors.surface.default.red}}, {{colors.surface.default.green}}, {{colors.surface.default.blue}}, 0.85);
+    foreground: {{colors.on_surface.default.hex}};
+    border-color: {{colors.secondary.default.hex}};
+
+    /* —— KooL 主题实际引用到的 7 个 colorN（其余 9 个没人用，不生成）—— */
+    color0:  {{colors.surface_container_lowest.default.hex}};
+    color1:  {{colors.error.default.hex}};
+    color7:  {{colors.on_surface.default.hex}};
+    color10: {{colors.surface_container_highest.default.hex}};
+    color11: {{colors.outline.default.hex}};
+    color12: {{colors.secondary.default.hex}};
+    color13: {{colors.tertiary.default.hex}};
+}

@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# 1. 设置 GTK 主题 (让 GTK 应用变黑)
+# 请替换为你具体的 Mocha 主题名
+gsettings set org.gnome.desktop.interface gtk-theme 'Catppuccin-Mocha'
+
+# 2. 极其重要：告诉系统 "prefer-dark"
+# 这就是为什么你的 Firefox 死活不肯变黑的原因，它在等这个信号
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'

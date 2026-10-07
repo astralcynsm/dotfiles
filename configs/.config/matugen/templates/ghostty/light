@@ -1,0 +1,42 @@
+# 由 matugen 生成，请勿手改
+# 模板源: ~/.config/matugen/templates/ghostty/light
+#
+# ★ ghostty 的 theme 文件是**单模式**的，所以明暗分成两个模板、两个产物。
+#   本文件是浅色那一份，深色见同目录的 dark。说明与坑（行尾注释、
+#   background-opacity 与 foot alpha 不等价）都在 dark 那份里详述。
+#
+# ★ 本文件不会自动生效，ghostty 真正读的是 active-theme，
+#   由 switch.sh 的 sync_ghostty_matugen() 按当前主题明暗自动搬运。
+
+background = #{{colors.surface.light.hex_stripped}}
+foreground = #{{colors.on_surface.light.hex_stripped}}
+background-opacity = 0.85
+
+# 选中文本
+selection-background = #{{colors.primary_container.light.hex_stripped}}
+selection-foreground = #{{colors.on_primary_container.light.hex_stripped}}
+
+# 光标
+cursor-color = #{{colors.primary.light.hex_stripped}}
+cursor-text = #{{colors.surface.light.hex_stripped}}
+
+# --- Normal colors (palette 0-7) ---
+# 配色语义逐条对齐 foot 模板 templates/foot/foot_theme.ini
+palette = 0=#{{colors.surface_container_highest.light.hex_stripped}}
+palette = 1=#{{colors.error.light.hex_stripped}}
+palette = 2=#{{colors.primary_fixed_dim.light.hex_stripped}}
+palette = 3=#{{colors.tertiary_fixed_dim.light.hex_stripped}}
+palette = 4=#{{colors.primary.light.hex_stripped}}
+palette = 5=#{{colors.secondary.light.hex_stripped}}
+palette = 6=#{{colors.tertiary.light.hex_stripped}}
+palette = 7=#{{colors.on_surface_variant.light.hex_stripped}}
+
+# --- Bright colors (palette 8-15) ---
+palette = 8=#{{colors.outline.light.hex_stripped}}
+palette = 9=#{{colors.error.light.hex_stripped}}
+palette = 10=#{{colors.primary_fixed.light.hex_stripped}}
+palette = 11=#{{colors.tertiary_fixed.light.hex_stripped}}
+palette = 12=#{{colors.primary_fixed.light.hex_stripped}}
+palette = 13=#{{colors.secondary_fixed.light.hex_stripped}}
+palette = 14=#{{colors.tertiary_fixed.light.hex_stripped}}
+palette = 15=#{{colors.on_surface.light.hex_stripped}}

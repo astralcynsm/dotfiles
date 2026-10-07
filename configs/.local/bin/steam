@@ -1,0 +1,19 @@
+#!/bin/sh
+# [2026-09-20] Steam 中文输入法修复（wrapper）
+#
+# 背景：Steam 客户端 UI 是 CEF/Chromium，在 XWayland 下只支持 XIM。
+# 而 CEF 只在 CJK locale 下才启用 XIM 的「按键转发」——
+# 否则它会正常建立 XIM 连接（fcitx5 那边能看到 IC），但从不把按键交给输入法。
+# 症状：输入法切不出来，按 Super+Space 只打出一个空格（空格是普通字符，正常进了输入框）。
+#
+# 本机桌面整体是 LANG=en_US.UTF-8，所以这里只给 Steam 单独带上 zh_CN.UTF-8。
+# Steam 的界面语言由它自己传给 webhelper 的 -lang=en_US 决定，不受此影响。
+#
+# 不用改 /etc/environment 或 Hyprland 的全局 env —— 那会把整个桌面的
+# locale 变成 zh_CN，影响所有应用（数字格式、排序、其它软件的语言）。
+#
+# 注：Steam 客户端 UI 无法走 Wayland 原生 IME（试过 --ozone-platform-hint=wayland、
+# --enable-features=UseOzonePlatform --enable-wayland-ime、以及 Steam 自己的 -wayland，
+# 参数都到不了 steamwebhelper，窗口始终是 XWayland）。所以 XIM + zh_CN locale 是唯一路径。
+export LANG=zh_CN.UTF-8
+exec /usr/bin/steam "$@"

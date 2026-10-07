@@ -1,0 +1,11 @@
+-- NOTE, THIS FILE IS BEING USED by disabling Laptop display monitor behaviour when closing lid.
+-- See notes on Laptops.conf
+--
+-- 由 UserConfigs/LaptopDisplay.conf 转换为 lua (Hyprland >= 0.55)
+
+-- hl.monitor({
+--     output = "eDP-1",
+--     mode = "preferred",
+--     position = "auto",
+--     scale = 1,
+-- })

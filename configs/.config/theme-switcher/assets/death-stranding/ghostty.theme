@@ -1,0 +1,33 @@
+# Death Stranding —— 由 theme-switcher 管理
+# ⚠ 改这个文件不生效（下次切主题会被覆盖）
+#    要改请改 ~/.config/theme-switcher/assets/death-stranding/ghostty.theme
+#
+# 翻译自同目录的 foot.ini（regular0-7 → palette 0-7，bright0-7 → palette 8-15）。
+# 那份 foot.ini 里没有 selection-* / cursor= ，所以这里也没有 ——
+# 这两类会落到 ~/.config/ghostty/config 里的值（那里设了 cursor-color）。
+#
+# ⚠ 本文件里不能写行尾注释（ghostty 会把整行丢掉，且完全静默）。
+
+background = #0a0a0a
+foreground = #e6e6e6
+background-opacity = 0.85
+
+# --- Normal colors (palette 0-7) ---
+palette = 0=#0a0a0a
+palette = 1=#c1443a
+palette = 2=#5a9c6a
+palette = 3=#e8842c
+palette = 4=#4a7ba7
+palette = 5=#9a6fa8
+palette = 6=#4ac6b7
+palette = 7=#c8c8c8
+
+# --- Bright colors (palette 8-15) ---
+palette = 8=#3a3a3a
+palette = 9=#e85a4a
+palette = 10=#7ab88a
+palette = 11=#ffa855
+palette = 12=#6a9bc7
+palette = 13=#b88fc8
+palette = 14=#6ee0cf
+palette = 15=#e6e6e6

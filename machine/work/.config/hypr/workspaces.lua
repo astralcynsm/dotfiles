@@ -1,0 +1,26 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- 工作机 workspace→monitor 分配 —— ⚠️ 骨架，P1 实测后决定要不要填
+--
+-- 语法：workspace = X, monitor:Y
+--   → hl.workspace_rule({ workspace = "X", monitor = "Y" })
+--
+-- ★ 单显示器时**一条都不用写**（全落在那块屏上，合法状态）。
+--   多显示器才需要把 ws 分配到具体屏。
+--
+-- ⚠️ 不要删本文件：machine.lua require 它，缺了 Hyprland 起不来。
+--
+-- ⚠️ 和主力机的约定差异，填之前先读：
+--   主力机上 **ws 8 = 游戏工作区** —— configs/ 的 WindowRules.lua 里
+--   tag=`games*`（gamescope / steam_app_*）的窗口都丢到 workspace 8。
+--   单显示器下这个约定照样成立（8 号就是个工作区），**不建议改**；
+--   要改就连 WindowRules.lua 一起改。
+--
+-- 示例（从 machine/primary/workspaces.lua 抄的形态）：
+--
+-- hl.workspace_rule({ workspace = "1", monitor = "DP-1" })
+-- hl.workspace_rule({ workspace = "2", monitor = "DP-1" })
+-- hl.workspace_rule({ workspace = "8", monitor = "DP-1" })   -- 游戏工作区
+--
+-- 其他可用的规则键（来自 wiki，全在 primary/workspaces.lua 里有例子）：
+--   rounding / decorate / gaps_in / gaps_out / border_size / on_created_empty / default
+-- ════════════════════════════════════════════════════════════════════════════

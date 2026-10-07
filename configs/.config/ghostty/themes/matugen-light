@@ -1,0 +1,42 @@
+# 由 matugen 生成，请勿手改
+# 模板源: ~/.config/matugen/templates/ghostty/light
+#
+# ★ ghostty 的 theme 文件是**单模式**的，所以明暗分成两个模板、两个产物。
+#   本文件是浅色那一份，深色见同目录的 dark。说明与坑（行尾注释、
+#   background-opacity 与 foot alpha 不等价）都在 dark 那份里详述。
+#
+# ★ 本文件不会自动生效，ghostty 真正读的是 active-theme，
+#   由 switch.sh 的 sync_ghostty_matugen() 按当前主题明暗自动搬运。
+
+background = #f5fafd
+foreground = #171c1f
+background-opacity = 0.85
+
+# 选中文本
+selection-background = #bbe9ff
+selection-foreground = #001f29
+
+# 光标
+cursor-color = #0d6681
+cursor-text = #f5fafd
+
+# --- Normal colors (palette 0-7) ---
+# 配色语义逐条对齐 foot 模板 templates/foot/foot_theme.ini
+palette = 0=#dee3e6
+palette = 1=#ba1a1a
+palette = 2=#8ad0ee
+palette = 3=#c5c3ea
+palette = 4=#0d6681
+palette = 5=#4c616b
+palette = 6=#5c5b7e
+palette = 7=#40484c
+
+# --- Bright colors (palette 8-15) ---
+palette = 8=#70787d
+palette = 9=#ba1a1a
+palette = 10=#bbe9ff
+palette = 11=#e2dfff
+palette = 12=#bbe9ff
+palette = 13=#cfe6f1
+palette = 14=#e2dfff
+palette = 15=#171c1f

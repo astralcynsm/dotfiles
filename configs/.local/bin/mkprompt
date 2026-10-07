@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# ===================================================
+# Arch Linux AI Prompt Builder (OpenAI 2.5 规范构建器)
+# ===================================================
+
+# 终端色彩
+CYAN='\033[1;36m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+PURPLE='\033[1;35m'
+BLUE='\033[1;34m'
+GRAY='\033[0;90m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+clear
+echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}${BOLD}       🎨 OpenAI 2.5 / 5段式 AI Prompt 极速构建器           ${NC}"
+echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GRAY}提示：直接输入内容后回车进入下一项；支持多行粘贴，按 Enter 提交。${NC}\n"
+
+# 通用输入函数
+read_field() {
+    local field_name="$1"
+    local hint="$2"
+    local example="$3"
+    
+    echo -e "${PURPLE}${BOLD}[ $field_name ]${NC} ${GRAY}($hint)${NC}"
+    echo -e "${GRAY}示例: $example${NC}"
+    echo -ne "${GREEN}❯ ${NC}"
+    
+    # 读取用户输入（支持 Readline 历史与行编辑）
+    read -r -e user_val
+    echo ""
+    echo "$user_val"
+}
+
+# 1. 交付目标
+DELIVERABLE=$(read_field "1. Deliverable (交付目标与画幅)" \
+    "一句话定义产出物类型与画幅" \
+    "A 16:9 cinematic anime keyframe / A character reference sheet")
+
+# 2. 主体与动作
+SUBJECT=$(read_field "2. Subject & Action (主体角色与动作)" \
+    "角色外观、核心特征、当前动作、装备" \
+    "AstralCynsm, skeleton wearing a white hooded techwear coat, sitting by campfire, holding a steaming mug")
+
+# 3. 构图与光影
+COMPOSITION=$(read_field "3. Composition & Lighting (构图与光影)" \
+    "镜头景别、视角高度、冷暖色温与环境光" \
+    "Medium shot, warm 2800K campfire glow on front, cool 5000K cyan aurora rim light from above")
+
+# 4. 画风与媒介
+STYLE=$(read_field "4. Style & Medium (画风流派与媒介)" \
+    "指定艺术家流派，如新川洋司/Jael/贰瓶勉/水墨" \
+    "Yoji Shinkawa style, dry-brush sumi-e ink wash, rough calligraphic strokes, minimalist graphic blocks")
+
+# 5. 约束与文字
+CONSTRAINTS=$(read_field "5. Constraints & Text (约束与文字锁定)" \
+    "双引号锁定台词、排除项、骨骼锁定" \
+    'Render text "STILL HERE." on the mug, strictly no human ears, anatomically correct skull, pure 2D hand-drawn')
+
+# 组装最终的标准格式
+FINAL_PROMPT=""
+[ -n "$DELIVERABLE" ]  && FINAL_PROMPT+="[Deliverable]: $DELIVERABLE\n\n"
+[ -n "$SUBJECT" ]      && FINAL_PROMPT+="[Subject & Action]: $SUBJECT\n\n"
+[ -n "$COMPOSITION" ]  && FINAL_PROMPT+="[Composition & Lighting]: $COMPOSITION\n\n"
+[ -n "$STYLE" ]        && FINAL_PROMPT+="[Style & Medium]: $STYLE\n\n"
+[ -n "$CONSTRAINTS" ]  && FINAL_PROMPT+="[Constraints & Text]: $CONSTRAINTS"
+
+# 去除首尾多余换行
+FINAL_PROMPT=$(echo -e "$FINAL_PROMPT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+clear
+echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}${BOLD}                   🎉 Prompt 构建完成！                     ${NC}"
+echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+# 在终端高亮打印结果
+echo -e "${YELLOW}$FINAL_PROMPT${NC}\n"
+echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+# 自动复制到剪贴板（适配 Wayland & X11）
+COPIED=0
+if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy &> /dev/null; then
+    echo -e "$FINAL_PROMPT" | wl-copy
+    COPIED=1
+elif [ -n "$DISPLAY" ] && command -v xclip &> /dev/null; then
+    echo -e "$FINAL_PROMPT" | xclip -selection clipboard
+    COPIED=1
+elif [ -n "$DISPLAY" ] && command -v xsel &> /dev/null; then
+    echo -e "$FINAL_PROMPT" | xsel -b
+    COPIED=1
+fi
+
+if [ $COPIED -eq 1 ]; then
+    echo -e "${GREEN}${BOLD}✔ 已自动复制到系统剪贴板！可以直接在 Cherry Studio 中 Ctrl+V 粘贴。${NC}"
+else
+    echo -e "${RED}⚠ 未检测到剪贴板工具 (wl-clipboard 或 xclip)，请手动复制上方文本。${NC}"
+fi

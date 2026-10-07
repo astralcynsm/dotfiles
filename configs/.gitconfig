@@ -1,0 +1,9 @@
+[credential]
+	helper = store
+[user]
+	email = astralcynsm@gmail.com
+	name = astralcynsm
+[http]
+	proxy = http://127.0.0.1:7890
+[https]
+	proxy = http://127.0.0.1:7890

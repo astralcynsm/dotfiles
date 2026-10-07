@@ -1,0 +1,15 @@
+[Unit]
+Description=定时触发 theme-auto-mode（每 5 分钟）
+
+[Timer]
+# 每 5 分钟醒一次。做成轮询而不是「算出下一个日出/日落时刻再 sleep 过去」，
+# 是为了扛住系统挂起：sleep 走的是 CLOCK_MONOTONIC，合盖睡一觉会错过触发点，
+# 而轮询醒来后重新判断一次就自动纠正了。代价只是最多晚 5 分钟换色。
+OnCalendar=*:0/5
+# 系统关机/挂起期间错过的触发，开机后补跑一次
+Persistent=true
+# 默认有最多 1 分钟的随机抖动省电，这里收敛一点，反正一天就跑 288 次
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

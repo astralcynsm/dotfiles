@@ -1,0 +1,34 @@
+# 核心背景与透明度 (设置为 0.7)
+background = #1f1f28
+foreground = #ddd8bb
+background-opacity = 0.7
+
+# 选中文本颜色
+selection-background = #49473e
+selection-foreground = #ddd8bb
+
+# 光标颜色 (背景, 文本)
+cursor-color = #1f1f28
+cursor-text = #e6e0c2
+
+# --- 调色板渲染 (palette 0-15) ---
+
+# Normal Colors (regular 0-7)
+palette = 0=#1f1f28
+palette = 1=#e46a78
+palette = 2=#98bc6d
+palette = 3=#e5c283
+palette = 4=#7eb3c9
+palette = 5=#957fb8
+palette = 6=#7eb3c9
+palette = 7=#ddd8bb
+
+# Bright Colors (bright 0-15)
+palette = 8=#8e8ead
+palette = 9=#ec818c
+palette = 10=#9ec967
+palette = 11=#f1c982
+palette = 12=#7bc2df
+palette = 13=#a98fd2
+palette = 14=#7bc2df
+palette = 15=#a8a48d

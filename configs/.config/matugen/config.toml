@@ -1,0 +1,188 @@
+[config]
+version_check = false
+
+# ============================================================
+# matugen 模板输出配置
+# 由 ii 的 scripts/colors/switchwall.sh 在换壁纸时调用
+# 模板文件在 ~/.config/matugen/templates/ 下
+# ============================================================
+
+# --- ii (illogical-impulse) 必需，勿删 ---
+[templates.m3colors]
+input_path = '~/.config/matugen/templates/colors.json'
+output_path = '~/.local/state/quickshell/user/generated/colors.json'
+
+[templates.kde_colors]
+input_path = '~/.config/matugen/templates/kde/color.txt'
+output_path = '~/.local/state/quickshell/user/generated/color.txt'
+
+[templates.wallpaper]
+input_path = '~/.config/matugen/templates/wallpaper.txt'
+output_path = '~/.local/state/quickshell/user/generated/wallpaper/path.txt'
+
+# --- Hyprland 边框 / 背景色 ---
+# 生成 hl.config({...}) 调用，含边框色与 misc.background_color
+# 由 UserConfigs/UserDecorations.lua 里的 require("colors") 加载
+[templates.hyprland]
+input_path = '~/.config/matugen/templates/hyprland/colors.lua'
+output_path = '~/.config/hypr/colors.lua'
+
+# --- hyprlock 锁屏变量 ---
+# 由 ~/.config/hypr/hyprlock.conf 顶部的 source 指令读取
+[templates.hyprlock]
+input_path = '~/.config/matugen/templates/hyprland/hyprlock-colors.conf'
+output_path = '~/.config/hypr/hyprlock/colors.conf'
+
+# --- foot 终端 ---
+# 注意：生成到 themes/ 下，不直接动 current_theme.ini
+# （current_theme.ini 是你手工维护的 Gruvbox 主题，保持不变）
+# 想切换到 matugen 配色时执行：
+#   cp ~/.config/foot/themes/matugen.ini ~/.config/foot/current_theme.ini
+# 想换回 Gruvbox：
+#   cp ~/.config/foot/themes/dark.ini  ~/.config/foot/current_theme.ini
+[templates.foot]
+input_path = '~/.config/matugen/templates/foot/foot_theme.ini'
+output_path = '~/.config/foot/themes/matugen.ini'
+
+# --- GTK3 ---
+# 现有 ~/.config/gtk-3.0/gtk.css 本就是 matugen 产物（776 字节），可直接接管
+[templates.gtk3]
+input_path = '~/.config/matugen/templates/gtk-3.0/gtk.css'
+output_path = '~/.config/gtk-3.0/gtk.css'
+
+# --- fuzzel ---
+[templates.fuzzel]
+input_path = '~/.config/matugen/templates/fuzzel/fuzzel_theme.ini'
+output_path = '~/.config/fuzzel/fuzzel_theme.ini'
+
+# --- fcitx5 输入法候选框 ---
+# matugen 这里只出三样东西：两套 theme.conf（配色）+ 两份 _colors.env
+# （交出画圆角背景图要用的两个颜色）。真正的背景图 panel.png / highlight.png
+# 由 ~/.config/theme-switcher/switch.sh 的 sync_fcitx5_assets() 读走
+# _colors.env 后用 ImageMagick 画出来 —— 不由 matugen 直接生成。
+#
+# 为什么不让 matugen 出 SVG：fcitx5 的 SVG 分支没有给 cairo pattern 设
+# CAIRO_EXTEND_PAD（默认 NONE，越界采样返回全透明），9-patch 拉伸边条时
+# 会采到图案外，导致面板边缘和切片线附近透出背景（表现为一圈红/蓝细线）。
+# PNG 分支用真子表面 + 显式 EXTEND_PAD，没这个问题。
+#
+# 两套主题输出到 fcitx5 的用户级主题目录，由 classicui.conf 的
+# Theme= / DarkTheme= 各指一套，fcitx5 自己按系统 color-scheme 即时切明暗
+# （UseDarkTheme=True），换壁纸时由 matugen 重新生成、theme-switcher 负责 reload。
+#
+# 圆角不是靠 theme.conf 里的 BorderRadius（那个键 fcitx5 并不认），
+# 而是靠 9-patch 背景图：[*/Background/Margin] 四边 18px 是"不拉伸的边角区"，
+# 图尺寸 48，圆角 16 完全落在里面；中间 12px 才是拉伸区。
+# 所以改圆角 = 同步改三处：switch.sh 里画图的 rx、图的尺寸、theme.conf 里的 Margin。
+[templates.fcitx5_dark_theme]
+input_path = '~/.config/matugen/templates/fcitx5/dark-theme.conf'
+output_path = '~/.local/share/fcitx5/themes/matugen-dark/theme.conf'
+
+[templates.fcitx5_dark_colors]
+input_path = '~/.config/matugen/templates/fcitx5/dark-colors.env'
+output_path = '~/.local/share/fcitx5/themes/matugen-dark/_colors.env'
+
+[templates.fcitx5_light_theme]
+input_path = '~/.config/matugen/templates/fcitx5/light-theme.conf'
+output_path = '~/.local/share/fcitx5/themes/matugen-light/theme.conf'
+
+[templates.fcitx5_light_colors]
+input_path = '~/.config/matugen/templates/fcitx5/light-colors.env'
+output_path = '~/.local/share/fcitx5/themes/matugen-light/_colors.env'
+
+# --- rofi ---
+# rofi 的配色原先由 wallust 生成到 ~/.config/rofi/wallust/colors-rofi.rasi，
+# wallust 废弃后那个文件冻结在 2026-09-04 的配色，rofi 从此和壁纸脱节。
+# 路径保持不变：13 个 KooL 主题里写死了这个 @theme 引用，换路径要动 13 个文件。
+[templates.rofi]
+input_path = '~/.config/matugen/templates/rofi/colors-rofi.rasi'
+output_path = '~/.config/rofi/wallust/colors-rofi.rasi'
+
+# --- KDE 配色方案（Dolphin 及所有 KDE 应用）---
+# 原先由 kde-material-you-colors 生成，那工具早被卸载，文件就冻在 2026-09-19
+# 的旧壁纸配色上（粉红色系），而当时壁纸早已换掉。改由 matugen 接管。
+#
+# 为什么不重新装回那个工具：它自带一个常驻 D-Bus 服务监听壁纸变化，
+# 且自己从壁纸提色 —— 和 matugen 是两套算法，会跟"matugen 全接管"打架。
+#
+# 为什么明暗要两份文件：KDE 没有"按系统 color-scheme 自动选主题"的机制
+# （fcitx5 有，所以它一套模板配两套目录即可），它只认 kdeglobals 里的
+# [General] ColorScheme= 单个值。所以两套方案并存于磁盘，由 switch.sh
+# 的 sync_kde_colorscheme() 改写 kdeglobals 来选。模板里钉死 .dark/.light
+# 后缀而非 .default，否则切明暗时两份会互相覆盖。
+#
+# 输出目录是 KDE 固定的扫描路径 ~/.local/share/color-schemes/，不是在 ~/.config 下。
+[templates.kde_dark]
+input_path = '~/.config/matugen/templates/kde/MaterialYouDark.colors'
+output_path = '~/.local/share/color-schemes/MaterialYouDark.colors'
+
+[templates.kde_light]
+input_path = '~/.config/matugen/templates/kde/MaterialYouLight.colors'
+output_path = '~/.local/share/color-schemes/MaterialYouLight.colors'
+
+# ============================================================
+# GTK4 —— [2026-09-20] 已启用
+# ------------------------------------------------------------
+# 原状：~/.config/gtk-4.0/gtk.css 与 gtk-dark.css **都是符号链接**，
+#   指向 ~/.themes/Flat-Remix-GTK-Blue-Dark/gtk-4.0/（372KB）。
+#   两个链接已删（settings.ini 的备份是 settings.ini.bak-20260920）。
+#
+# 为什么 gtk-dark.css 也必须删 —— 这是最容易踩的一脚：
+#   GTK4 的加载顺序是 theme 的 gtk.css → 用户的 gtk.css →
+#   用户的 gtk-dark.css。用户的 gtk-dark.css 只要还在，就会**最后**
+#   加载、把 matugen 刚写进去的颜色整个压掉（症状是"改了没用"）。
+#   删掉后 GTK4 只会去找 theme 目录里的 gtk-dark.css，那个在用户的
+#   gtk.css 之前加载，不构成威胁。.themes 里的源文件一个字节没动。
+#
+# 与 GTK3 侧的分工：gtk-4.0/settings.ini 的 gtk-theme-name 保持
+#   Flat-Remix-GTK-Blue-Dark 不动（与 gtk-3.0/settings.ini 对称），
+#   它只影响非 libadwaita 的 GTK4 应用（本机只有 gedit）。
+#   另两个 GTK4 应用 gnome-system-monitor / loupe 都是 libadwaita ——
+#   libadwaita **强制用内置 Adwaita 样式、完全忽略 gtk-theme-name**，
+#   只认系统 color-scheme，所以它们由本模板全权接管。
+#   模板用 @media (prefers-color-scheme: light/dark) 分块，
+#   一份文件同时管明暗，不需要额外生成 gtk-dark.css。
+# ============================================================
+[templates.gtk4]
+input_path = '~/.config/matugen/templates/gtk-4.0/gtk.css'
+output_path = '~/.config/gtk-4.0/gtk.css'
+
+# ============================================================
+# ghostty 终端 —— [2026-10-08] 已启用
+# ------------------------------------------------------------
+# 与 foot 的分工完全对称，但多一个坑：**ghostty 的 theme 文件是单模式的**。
+# foot 一份文件里能同时写 [colors-dark] 和 [colors-light]，由 foot 自己按
+# 系统明暗选；ghostty 没有这个机制，一个 theme 文件就是一组颜色。
+# 所以这里必须两个模板、两个产物，再由 switch.sh 按当前主题的明暗
+# 把对应那份搬到 active-theme。
+#
+# 【为什么生成到 themes/ 而不直接写 active-theme】
+#   与 foot 同理：active-theme 是"当前选用哪套"的指针，由 switch.sh 决定；
+#   matugen 只负责生产候选，不负责选用。这样静态主题（switch.sh 的
+#   COMPONENT_MAP）和 matugen 配色才能共用同一条指针，互相不打架。
+#
+# 【ghostty 的配置链】
+#   ~/.config/ghostty/config 最后一行：config-file = ~/.config/ghostty/active-theme
+#   ghostty 把被 include 的文件在**该行位置**展开，所以 active-theme 里的值
+#   后于主配置生效，能覆盖主配置里的同名键（例如主配置里那行 cursor-color）。
+#   ⚠ 这也意味着 theme 文件里**不能写行尾注释** —— ghostty 只认行首的 #。
+#     实测（1.3.1-arch2）：带行尾注释的那一行会被**整行丢弃**，且退出码 0、
+#     stderr 无输出 —— 完全静默的失败。模板里已按此写（注释一律另起一行），
+#     从 foot 模板照抄行尾注释会中招，详见 templates/ghostty/dark 顶部说明。
+#
+# 【重载】
+#   运行中的 ghostty 不会因为 active-theme 变化而自动重读。
+#   走 D-Bus 的 GTK action（`ghostty +reload-config` 这个子命令**不存在**）：
+#     gdbus call --session --dest com.mitchellh.ghostty \
+#       --object-path /com/mitchellh/ghostty \
+#       --method org.gtk.Actions.Activate reload-config '[]' '{}'
+#   已实测：action 注册在册，调用返回 ()，退出码 0。
+#   由 switch.sh 的 reload_ghostty() 负责，见那个函数的注释。
+# ============================================================
+[templates.ghostty_dark]
+input_path = '~/.config/matugen/templates/ghostty/dark'
+output_path = '~/.config/ghostty/themes/matugen-dark'
+
+[templates.ghostty_light]
+input_path = '~/.config/matugen/templates/ghostty/light'
+output_path = '~/.config/ghostty/themes/matugen-light'

@@ -1,0 +1,5 @@
+# Gruvbox Dark —— 固定配色，与壁纸无关
+THEME_DESC="Gruvbox Dark（固定配色）"
+THEME_TYPE="static"
+THEME_ASSETS="gruvbox-dark"
+THEME_MODE="dark"

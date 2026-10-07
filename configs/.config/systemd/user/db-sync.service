@@ -1,0 +1,11 @@
+[Unit]
+Description=DeaDBeeF Media Library Auto Sync
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/db-sync
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

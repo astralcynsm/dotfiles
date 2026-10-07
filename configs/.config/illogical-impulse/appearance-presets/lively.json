@@ -1,0 +1,11 @@
+{
+  "name": "灵动",
+  "description": "大圆角 + 更慢、更有弹性的动画 + 实心图标。整体更「软」更活泼。",
+  "values": {
+    "rounding.scale": 1.5,
+    "animation.scale": 1.6,
+    "animation.curveStyle": "expressive",
+    "iconFillAll": true,
+    "letterSpacing": 0
+  }
+}

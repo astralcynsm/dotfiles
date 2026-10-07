@@ -1,0 +1,11 @@
+[Unit]
+Description=按上海日出日落自动切换明暗模式
+Documentation=file:%h/.config/theme-switcher/README.md
+# 只为让日志里能看出因果；graphical-session 没起来也不阻塞（After 不等待未启动的单元）
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.config/theme-switcher/auto-mode.sh
+# 这个脚本自己是幂等的：算出现在「应该」是什么模式，和当前一致就什么都不做。
+# 所以每次触发都很轻，一天里真正会调 switch.sh 的只有日出、日落两次。

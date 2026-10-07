@@ -1,0 +1,10 @@
+{
+  "name": "全方角",
+  "description": "装饰性圆角全部归零 + 开面板描边。注意 full 单独给了 3：它管的是头像遮罩/开关轨道/滑块手柄这类「圆形」语义，设 0 会让头像变方块、开关变方轨，看着像坏了。",
+  "values": {
+    "rounding.scale": 0,
+    "rounding.full": 3,
+    "panelOutline": true,
+    "letterSpacing": 0
+  }
+}

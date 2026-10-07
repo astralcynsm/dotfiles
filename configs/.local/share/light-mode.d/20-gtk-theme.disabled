@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# 1. 设置 GTK 主题 (让 GTK 应用变白)
+# 请替换为你 nwg-look 里看到的具体的 Latte 主题名
+gsettings set org.gnome.desktop.interface gtk-theme 'Catppuccin-Latte'
+
+# 2. 极其重要：告诉系统现在是 "default" (通常意味着亮色) 或 "prefer-light"
+# Firefox 和 Electron 应用 (QQ) 主要看这个来决定网页/界面渲染成黑还是白
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-light'
+
+# 3. (可选) 如果你的图标也要换
+# gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Light'
