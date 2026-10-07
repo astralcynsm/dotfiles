@@ -317,7 +317,7 @@ auto-mode 17:35:21 日落切 matugen-dark → darkman 17:37:37 日落转移，
 | COPR 残留（hyprland 相关）| `dnf copr list` | （待填）| |
 | `~/.config/hypr` 残留 | `ls ~/.config/hypr`（对照本仓库 diff）| （待填）| |
 | 旧 Hyprland 包 | `rpm -qa \| grep -i hypr` | （待填）| |
-| 显示器实况 | `hyprctl monitors` 或登录 GNOME 跑 `wlr-randr` | （待填）| → 生成 `machine/work/monitors.lua` |
+| 显示器实况 | `hyprctl monitors` 或登录 GNOME 跑 `wlr-randr` | （待填）| → 填 `machine/work/.config/hypr/monitors.lua` |
 | NVIDIA 驱动现状 | `nvidia-smi` / `rpm -qa \| grep nvidia` | （待填）| RPM Fusion akmod-nvidia |
 | GDM 里的会话列表 | `ls /usr/share/wayland-sessions/` | （待填）| 保留 GNOME，追加 Hyprland |
 | 旧 dotfiles / chezmoi 残留 | `ls ~/.dotfiles ~/.local/share/chezmoi` | （待填）| |

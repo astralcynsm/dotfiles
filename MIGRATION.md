@@ -294,6 +294,11 @@ hyprctl keyword __nope__ 1; echo "exit=$?"   # 期望：打印 "Use eval." 但 e
 
 ### 步骤
 
+> **路径约定**（本节乃至全文）：`scripts/xxx.sh`、`configs/xxx.lua`、`hypridle.conf` 等
+> 都指**目标机 `~/.config/hypr/` 下的相对路径** —— 例如 `scripts/Dropterminal.sh` =
+> `~/.config/hypr/scripts/Dropterminal.sh`。**不是**仓库根那两个同名目录
+> （仓库的 `scripts/` 是部署/体检工具，`configs/` 是通用层素材，别混）。
+
 - [ ] 3.5.1 打开 `docs/known-issues.md` R7 的清单表逐条勾（它是权威账目）
 - [ ] 3.5.2 改写 `hypridle.conf` 的 3 处（**最要紧**：屏幕永不关 + 唤醒后不亮）
 - [ ] 3.5.3 改写 `hypr/configs/Keybinds.lua` 的 2 处 —— ⚠ 都嵌在
