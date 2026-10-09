@@ -1360,6 +1360,71 @@ README 的 Fedora 包列表要加 `libnotify`。
 （large ≥ 16）时完全跟随，不跟参数化打架。选择器行（`StyledRadioButton`）本来就是 `full` 胶囊，
 不动。卡的角 16px、内层 10px、chip 胶囊 —— 层次刚好。
 
+### 自动兜底层：obsidian-git 双层架构（2026-10-10 第六轮）
+
+**背景与决策。** 用户质疑「两边快速同步 + 保证 git commit，按 G 手写是否最优」。结论：手写
+检查点是约束本身带来的「奇怪感」，不是实现问题；但同步节奏绑在按键上有个真缺口——忘按 =
+另一台看不见。于是叠一层**稀疏自动兜底**：obsidian-git 插件（2.41.1）——**停止编辑 60 分钟**
+自动 commit+sync + 开机自动 pull + 独立每 10 分钟纯拉取。手写路径（G / Fedora interactive /
+速记）**全部保留**为日常主路径，自动层只兜底。零 QML 改动。插件文件 + data.json 随 vault 进
+git（Fedora 拉下来启用一次即得同款）。
+
+**bench 实测钉死的机制**（/tmp 一次性库 + 真 Obsidian + 裸 remote.git，真库零接触；脚本存档
+在 `cynsm-workflow/bench/`）：
+
+- **触发语义 = 「任何 vault 内文件变化」**：编辑、外部 jq、pull 写入……都重置同一个 debouncer，
+  **从最后一次变化起算 `autoSaveInterval`**（真库 60 分钟）到点跑 `doAutoCommitAndSync`
+  （commit → pull → push，顺序固定）。持续编辑期间永不提交（e2 实测：末编辑后 60.1s 提交、
+  内容含全部编辑）。每轮完成后 re-arm，再等一个间隔。
+- **设置重载双路径（安装与验证的捷径）**：改 data.json 到 **commit 组键**（如
+  `changedFilesInStatusBar`）→ 重载时**立即一轮** commitAndSync（秒级提交，e1'/b8f93b2 实测）；
+  改到 **pull 组键**（`autoPullInterval`）→ 只重启 pull 定时器；而 data.json 的文件变化本身
+  仍走 debouncer（41552a1 实测 60s）。**首日验收就靠这条**：翻一个外观键 → 秒级拿到 auto 提交。
+- **autoPull 是独立纯拉取**：`doAutoPull → pullChangesFromRemote`（只 pull，无 commit），按
+  `autoPullInterval` 计时（真库 10 分钟）；干净库上会静默拉远端新提交（c2：+60s 拉到）。
+- **冲突两形态**（d2 实测都出现过）：
+  - **A）rebase 挂起**：本地已提交 + `pull --rebase` 重放撞车 → `.git/rebase-merge` 在位；
+  - **B）autostash 弹回**：工作区脏（写到一半）+ 远端动了同区域 → `pull --rebase --autostash`
+    ff 后弹回冲突 → **没有 rebase 目录**，只有 `UU` 未合并索引 + `stash@{0}: autostash` 残条。
+  插件碰到冲突会**留现场**（"Resolve conflicts and commit manually"），不 abort。
+- **形态 B 现场的命运（d4/d5b 对照实录）**：它**不按时间自动消失**——d5b 用 15s 超频拍打 11
+  次 + 死线后对照，打在 unmerged 上**零动作**（pull 失败 → displayError 弹错，现场原样）。
+  而**下一个「有实质改动」的自动轮**会把它卷走：commit 步骤是 add -A 式，未合并文件被当
+  「已解决」add 掉，`<<<<<<<` 标记原样进 auto 提交并推送（d4 实录 cb4bab7，2 个文件——触发
+  条件正是那轮里 data.json 有真改动）。**无实质改动时不消费**（d5b 反证）。autostash 残条则
+  永不自动清理（人工 `git stash drop`）。
+
+**vault-commit 守卫补丁（双 actor 互踩防护）。** `guard_mid_operation` 原版只查
+`rebase-*`/`MERGE_HEAD` —— **d2 实测形态 B 完全漏网**（没有 rebase 目录）：漏网时 `add -A`
+把 UU 当已解决，`apply "不该提交"` 真把带标记的 b.md 推了出去（fa57bd6）。已扩展：加查
+`git ls-files -u` 非空即 `mid-operation` 拒绝（附终端指路：解决 → commit → push → `stash drop`）。
+隔离测试（/tmp/vc-guard-test，假 notify-send 拦通知）三态全绿：B 拒、A 拒、正常态
+clean/dirty/apply 回归；部署文本与被测文本 `diff` 为空。
+
+**共存注意。**
+
+- 双 actor（手动 G / 自动轮）撞 `index.lock` 概率极小、各自优雅失败下轮重试，不损坏。
+- 自动轮把 `.obsidian/` 也纳入提交；**开机/首启 sweep 会清掉 staged 的用户改动**
+  （SecondBrain 首启清掉新库三件套、LCS 首次打开会清 `M 2026-10-07.md`——均为预期）。
+- `disablePopups: true` 是必须的：`"Pull: Everything is up-to-date"` 不以 `No changes` 开头，
+  `disablePopupsForNoChanges` 盖不住它（否则每 10 分钟一条）。错误通知走 `showErrorNotices`、
+  不受 `disablePopups` 影响——冲突/拉取失败时该弹的还是会弹。
+- 同步语义（真库 data.json）：`syncMethod: rebase` + `rebaseAutoStash: "enabled"` +
+  `pullBeforePush`。autostash 选 enabled 是权衡：代价 = 撞车时冲突标记写进笔记；收益 =
+  写到一半也能 pull（读侧永远新鲜）。disabled 会让「有未提交改动」这个常态直接拉取失败、
+  每 10 分钟一条错误通知。
+
+**诚实记录（第六轮）。**
+
+- 形态 B 的漏网是**测出来的**，不是想出来的——原守卫的 A 形态测试全绿，d2 一上真冲突就现形。
+  「守卫测过 A ≠ 守卫到位」。
+- d5 首轮翻车：clone-b 的同步点放在步骤 0，vault 中途又 auto 推了 41552a1 → push 被拒。
+  第五轮写过的规矩（制造撞车前第二台先 pull）**自己在第六轮又踩一次**——已写进脚本。
+- Arch 的 Obsidian 进程名是 `electron`（`/usr/lib/electron43/electron …/obsidian/app.asar`）：
+  `pgrep -x obsidian` **永不匹配**，用 `pgrep -f 'obsidian/app[.]asar'`。
+- jq 的 `//` 把 `false` 当空值（`.ok // true` → 永远 true）——脚本里判 JSON 必须写成
+  `.ok == false` 这种显式比较。
+
 ### 验证方法（本次用的）
 
 ```bash
@@ -1399,6 +1464,16 @@ VAULT_COMMIT_CONFIG=/tmp/vc-test/vaults.json qs -p ~/.config/quickshell/ii/vc-ha
 #   截图：grim -g "<焦点屏 x,y WxH>"；近景核对圆角用 Read 读裁剪图。
 #   ⚠️ 改了驱动场景要**重跑 build 脚本**再 qs —— 忘了重建就白跑一轮（C 场景踩过）。
 #   ⚠️ 老式的「harness 放 ii/ 里 + qs -p + sed 还原 Exclusive」已废弃。
+
+# ⭐ 第六轮起：插件行为用「一次性 bench vault + 真 Obsidian」实测（/tmp/plugin-bench，真库零接触）：
+#   bench vault（几篇 md + git init）+ 裸 remote.git，Obsidian「打开文件夹作为库」。
+#   ⚠️ 开 bench 库会改写 ~/.config/obsidian/obsidian.json 的 open 字段 → 开工先备份、收工还原。
+#   ⚠️ Arch 的 Obsidian 进程名是 electron（pgrep -x obsidian 永不匹配）；关 bench 实例按
+#   hyprctl clients -j 里该窗口的 pid 发 SIGTERM，别误杀真库实例。
+#   时钟加速：改 data.json 的 autoSaveInterval=1 / autoPullInterval=0.25；改「commit 组键」
+#   （如 changedFilesInStatusBar）触发设置重载 = 立即一轮 commitAndSync（首日验收就用它）。
+#   造形态 B：vault 侧改 b.md → clone-b fetch+reset 到 origin/main → clone-b 改同文件推 → ≤15s 出 UU。
+#   脚本与真库 data.json 存档在 cynsm-workflow/bench/（test-d2..d5.sh + real-data.json）。
 ```
 
 ### 诚实记录
@@ -1474,6 +1549,57 @@ TESSDATA_PREFIX=/tmp/tessroot/tessdata tesseract /tmp/ocr-zh.png stdout -l eng+c
 - 命令行本体（tesseract + perl 管道）三类测试图全过；**QML 侧没端到端跑过**
   （要真人按 Super+X 框选），改的只是一条命令字符串，`qmllint` 干净。
 - `-l` 里带 `osd` 是上游行为（`--list-langs` 输出第二行）：实测不报错、不污染 stdout。
+
+---
+
+## 14. quickshell 包重编：Qt 6.12 兼容回移（pin 不动）
+
+2026-10-10 系统 Qt 6.11.2 → 6.12.0，quickshell 自带 pacman 钩子
+（`/usr/share/libalpm/hooks/quickshell-check.hook`，触发条件是 qt6-base / qt6-wayland 升级）
+报「built against 6.11.2, likely to cause crashes」。
+
+**根因不只是「重编一下」—— 直接重编编不过。** Qt 6.12 在 `qmetatype.h` 加了硬
+`static_assert`（"Meta Types must be fully defined"）：pin 代码把不完整类型指针塞进内联
+`QBindable<T*>` 访问器 + `Q_DECLARE_OPAQUE_POINTER`，SFINAE 的完整性 trait 在类定义被解析前
+就被 memoize 成 false，mocs_compilation 里连坐碎一片（报错点看着在 monitor/workspace，
+真凶在 connection）。
+
+上游修复 = `5d5d498`（"all: use MOC includes instead of opaque pointer defiinitions"，
+2026-10-03）：`Q_DECLARE_OPAQUE_POINTER` 一律换成 `Q_MOC_INCLUDE("头文件")`，
+内联 bindable 访问器搬进 .cpp。已回移到 pin 上。
+
+```bash
+cd ~/ricing/build/quickshell-ii      # PKGBUILD pkgrel 8→9，pin 仍是 7511545
+makepkg -ef --noconfirm              # ⚠ -e 必须带！
+```
+
+⚠ **不带 `-e` 会把 src checkout 拉回 pin、静默丢掉回移**（makepkg 对 VCS 源默认重新
+checkout `#commit=` 指定的提交，修复就白移了）。`-e` 复用现有源码树。
+
+回移本体存证：commit `eb08f43`（保留上游作者与 message）+ tag `qt6.12-backport`；
+patch 存档 `0001-all-use-MOC-includes-...patch` 就在构建目录，源码树被清时用它重放。
+回移冲突全部来自「pin 早于上游重构」：`bUsingLua`、workspace address 格式 pin 里根本不存在
+（别把上游新版行抄进来）；i3 的 bindable 访问器要一并 const 化以匹配 .cpp 定义；
+changelog 保留 pin 侧。
+
+### 验证（装进系统之前先验包）
+
+```bash
+# 不动系统：解包新二进制单独自检，应无输出、exit 0
+bsdtar -xf illogical-impulse-quickshell-git-0.1.0.r1-9-x86_64.pkg.tar.zst -C /tmp/pkgcheck usr/bin/quickshell
+/tmp/pkgcheck/usr/bin/quickshell --private-check-compat; echo "exit=$?"
+```
+
+装包后 `systemctl --user restart quickshell-ii` 即可验证 —— **不必等重启系统**
+（Qt 包已经装上，重启只是把「重载新二进制」这步提前）；bar 里 fork 的应用不会陪葬
+（unit 已改 KillMode=process）。
+
+### 诚实记录
+
+- dots-hyprland 上游（本地 checkout `2f0c8bf4`）**仍 pin 7511545**，2026-10-10 查过，
+  没有「更新版 pin」可换；路线就是「pin 不动 + 回移补丁」。
+- 下次 Qt 大版本升级，钩子还会报警：流程 = 找上游对应的兼容 commit →
+  cherry-pick 到 pin → pkgrel+1 → `makepkg -ef` → 解包自检 → 装 → 重启 qs。
 
 ---
 
