@@ -1372,14 +1372,18 @@ git（Fedora 拉下来启用一次即得同款）。
 **bench 实测钉死的机制**（/tmp 一次性库 + 真 Obsidian + 裸 remote.git，真库零接触；脚本存档
 在 `cynsm-workflow/bench/`）：
 
-- **触发语义 = 「任何 vault 内文件变化」**：编辑、外部 jq、pull 写入……都重置同一个 debouncer，
+- **触发语义 = 「任何 vault 内文件变化」**：编辑、pull 写入……都重置同一个 debouncer，
   **从最后一次变化起算 `autoSaveInterval`**（真库 60 分钟）到点跑 `doAutoCommitAndSync`
   （commit → pull → push，顺序固定）。持续编辑期间永不提交（e2 实测：末编辑后 60.1s 提交、
   内容含全部编辑）。每轮完成后 re-arm，再等一个间隔。
-- **设置重载双路径（安装与验证的捷径）**：改 data.json 到 **commit 组键**（如
-  `changedFilesInStatusBar`）→ 重载时**立即一轮** commitAndSync（秒级提交，e1'/b8f93b2 实测）；
-  改到 **pull 组键**（`autoPullInterval`）→ 只重启 pull 定时器；而 data.json 的文件变化本身
-  仍走 debouncer（41552a1 实测 60s）。**首日验收就靠这条**：翻一个外观键 → 秒级拿到 auto 提交。
+  （⚠️ 例外：`.obsidian/` 下的配置改动**不** reset 计时器——真库 2026-10-10 修正，见下条。）
+- **设置重载 ≠ 触发（真库 2026-10-10 修正）**：改 data.json 的键 → 插件重载设置（内存立即生效，
+  实测 `autoSaveInterval` 60→2 读回 =2），但**不 arm、不触发**任何一轮；data.json 的改动本身也
+  **不 reset 计时器**（150s+ 观测无动作），只有它的**内容**会搭下一个「有实质改动」轮的顺风车
+  被提交（692f8a4 实证）。bench 曾记两条捷径——「改 commit 组键 → 重载时立即一轮」
+  （e1'/b8f93b2）、「data.json 变化也走 debouncer」（41552a1）——**真库均未复现，别再依赖**。
+  **触发与验收法 = 造一个 vault 文件变化**（新建/编辑笔记）→ 等 `autoSaveInterval` 到点
+  （真库 2 分钟档：新建测试文件后等到了 auto 提交 692f8a4）。
 - **autoPull 是独立纯拉取**：`doAutoPull → pullChangesFromRemote`（只 pull，无 commit），按
   `autoPullInterval` 计时（真库 10 分钟）；干净库上会静默拉远端新提交（c2：+60s 拉到）。
 - **冲突两形态**（d2 实测都出现过）：
@@ -1404,8 +1408,12 @@ clean/dirty/apply 回归；部署文本与被测文本 `diff` 为空。
 **共存注意。**
 
 - 双 actor（手动 G / 自动轮）撞 `index.lock` 概率极小、各自优雅失败下轮重试，不损坏。
-- 自动轮把 `.obsidian/` 也纳入提交；**开机/首启 sweep 会清掉 staged 的用户改动**
-  （SecondBrain 首启清掉新库三件套、LCS 首次打开会清 `M 2026-10-07.md`——均为预期）。
+- 自动轮把 `.obsidian/` 也纳入提交；**「开机/首启 sweep 清掉 staged 用户改动」是误读
+  （2026-10-10 真库修正）**——没有 sweep 这回事：staged 改动不被主动消费、也不会自己消失
+  （实查：LCS 的 `2026-10-07.md` 至今仍以 `M ` staged 躺在 index 里），但会被**下一个有实质
+  改动的自动轮顺走**（commit 步骤是 add -A 式）——692f8a4 实证：新库三件套
+  （app/appearance/core-plugins）+ community-plugins + data.json + 测试文件共 6 件，随
+  「新建笔记」那一轮进历史。「首启清掉」的真身 = 之后某轮连带提交，不是启动动作。
 - `disablePopups: true` 是必须的：`"Pull: Everything is up-to-date"` 不以 `No changes` 开头，
   `disablePopupsForNoChanges` 盖不住它（否则每 10 分钟一条）。错误通知走 `showErrorNotices`、
   不受 `disablePopups` 影响——冲突/拉取失败时该弹的还是会弹。
@@ -1424,6 +1432,12 @@ clean/dirty/apply 回归；部署文本与被测文本 `diff` 为空。
   `pgrep -x obsidian` **永不匹配**，用 `pgrep -f 'obsidian/app[.]asar'`。
 - jq 的 `//` 把 `false` 当空值（`.ok // true` → 永远 true）——脚本里判 JSON 必须写成
   `.ok == false` 这种显式比较。
+- 首日验收「两次假阴性 → CDP 定案」（2026-10-10）：拿「改 data.json 键 → 等提交」当插件存活
+  探针，此前所有「插件没跑」结论**全是假的**（插件一直在跑；该路径就是不触发）。定案工具 =
+  真库起 `obsidian --remote-debugging-port=9222` 后走 CDP `Runtime.evaluate` 直读插件状态与
+  localStorage——比按行为猜快一个量级。副产品：受限模式的开关就是 localStorage
+  `enable-plugin-<appId>`（**机器本地**，不随 git 走 → Fedora 每库首开要人工点一次）。
+  最终全链实测：造 vault 变化 → 692f8a4 auto 提交 → push → `git ls-remote` 实查一致。
 
 ### 验证方法（本次用的）
 
@@ -1470,8 +1484,9 @@ VAULT_COMMIT_CONFIG=/tmp/vc-test/vaults.json qs -p ~/.config/quickshell/ii/vc-ha
 #   ⚠️ 开 bench 库会改写 ~/.config/obsidian/obsidian.json 的 open 字段 → 开工先备份、收工还原。
 #   ⚠️ Arch 的 Obsidian 进程名是 electron（pgrep -x obsidian 永不匹配）；关 bench 实例按
 #   hyprctl clients -j 里该窗口的 pid 发 SIGTERM，别误杀真库实例。
-#   时钟加速：改 data.json 的 autoSaveInterval=1 / autoPullInterval=0.25；改「commit 组键」
-#   （如 changedFilesInStatusBar）触发设置重载 = 立即一轮 commitAndSync（首日验收就用它）。
+#   时钟加速：改 data.json 的 autoSaveInterval=1 / autoPullInterval=0.25（⚠️ 改键只重载设置、
+#   不触发任何一轮——真库 2026-10-10 修正；「改 commit 组键 → 立即一轮」未复现，别当捷径）。
+#   触发/验收 = 造一个 vault 文件变化（新建/编辑笔记）→ 等 interval 到点。
 #   造形态 B：vault 侧改 b.md → clone-b fetch+reset 到 origin/main → clone-b 改同文件推 → ≤15s 出 UU。
 #   脚本与真库 data.json 存档在 cynsm-workflow/bench/（test-d2..d5.sh + real-data.json）。
 ```
