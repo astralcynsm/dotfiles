@@ -84,14 +84,17 @@ Scope {
     property string okText: ""
 
     // ══ 打开 / 关闭 ════════════════════════════════════════════════════
+    // busy 时按快捷键：不静默吞掉，把面板摆出来让人看见「还有活没干完」。
+    // （2026-10-11 事故：capture 子进程挂死 → busy 永久为真 → 所有快捷键无声失灵，
+    //   连点 X 关窗也救不回来——close() 里的 !busy 判断把 phase 也一并锁死了）
     function openCommit() {
-        if (root.busy) return;
+        if (root.busy) { root.panelOpen = true; return; }
         root.mode = "commit";
         root.openAndDetect();
     }
 
     function openCapture() {
-        if (root.busy) return;
+        if (root.busy) { root.panelOpen = true; return; }
         root.mode = "capture";
         root.openAndDetect();
     }
@@ -365,6 +368,24 @@ Scope {
         id: doneTimer
         interval: 1400
         onTriggered: root.close()
+    }
+
+    // busy 看门狗：正常操作秒级到几十秒（apply 里含 push）。超时 = 子进程疑似挂住，
+    // 干掉它并复位——否则 phase 永远卡 busy，所有快捷键静默失灵，只能重启 quickshell
+    // 才能救（2026-10-11 事故：xdg-open 前台等 Obsidian 主进程退出，等到了天荒地老）。
+    // 注：杀进程后 StdioCollector 仍会补一条「返回为空」的迟到结果，可能把这里的提示
+    // 换成更朴素的错误文案——两者都在说「这轮没成」，可接受。
+    Timer {
+        id: busyWatchdog
+        interval: 120000
+        repeat: false
+        running: root.busy
+        onTriggered: {
+            root.errorText = Translation.tr("Operation timed out (the process seems stuck). Reset, please retry.");
+            root.phase = "editing";
+            applyProc.running = false;
+            captureProc.running = false;
+        }
     }
 
     // ══ 入口 ═══════════════════════════════════════════════════════════

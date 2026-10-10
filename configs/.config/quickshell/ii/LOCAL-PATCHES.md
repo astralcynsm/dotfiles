@@ -1513,6 +1513,32 @@ VAULT_COMMIT_CONFIG=/tmp/vc-test/vaults.json qs -p ~/.config/quickshell/ii/vc-ha
   那个库」，链条才走了 `detect_from_obsidian_json` 的空匹配分支。真机配置恰好覆盖了这种情况，
   所以之前四轮都没暴露 —— 说明**测试环境与真机状态不同**本身就是有价值的探针。
 
+### 第七轮（2026-10-11 夜修）：capture 挂死 → busy 死锁（G/S 全静默失灵）
+
+**症状**：`SUPER+ALT+S` 建完笔记、Obsidian 也把笔记打开了，但弹框不自动关；
+点 X 关掉后再按 G/S **毫无反应、也没有报错**。
+
+**根因（三层叠加，全部现场钉死）**：
+1. `vault-commit` capture 里 `xdg-open "$uri"` **前台等**：Obsidian 本来就开着时，electron
+   第二实例转发完 URI 就退出（~1s），所以前几轮一直没暴露；Obsidian 没开时，它启动的
+   electron **就是 App 主进程、永不退出** → `xdg-open` 永不返回 → 脚本永不返回。
+2. QML 靠 `StdioCollector.onStreamFinished` 等脚本退出来推进状态 → `phase` 永远 `busy`。
+3. `openCommit()/openCapture()` 开头 `if (root.busy) return` **静默吞键**，`close()` 里
+   `if (!root.busy) phase = "idle"` 又把手动复位路径锁死 → 所有快捷键失灵。
+
+**修法**（脚本 + QML 两边）：
+- 脚本：打开动作改 fire-and-forget —— `( "$opener" "$uri" </dev/null >/dev/null 2>&1 & ) || true`。
+  ⚠️ 两个条件缺一不可：**后台**（治前台等待）+ **stdout/stderr 重定向**（子进程若攥着 stdout，
+  QML 等 EOF 会继续等）。隔离测法：把假 `xdg-open`（`exec sleep 300`）放进 PATH 前，
+  `vault-commit capture tv "x" | cat` 应毫秒级返回 JSON 而非挂住（实测 17ms ✓）。
+- QML：busy 时按键不再静默（`root.panelOpen = true` 把面板摆出来让人看见）；
+  加 120s 看门狗 Timer（`running: root.busy`），超时杀 `applyProc/captureProc` + 复位 + 报
+  「操作超时…请重试」（词条手写进 `translations/zh_CN.json`）。
+
+**现场排障捷径**：`ps --ppid <qs pid>` 抓直系孩子 → `ps -o wchan` 看挂哪（`do_wait`=等孩子）→
+`/proc/<pid>/fd` 对 inode 找**谁攥着 stdout**。本例 stdout 只有脚本自己握着 → **杀掉脚本就能让
+QML 解套，不用重启 quickshell**（这台机器重启会连坐 cgroup 里的 QQ/Steam，Restart 不是逃生门）。
+
 ---
 
 ## 13. Super+X 区域 OCR：中文支持 + 去汉字间空格

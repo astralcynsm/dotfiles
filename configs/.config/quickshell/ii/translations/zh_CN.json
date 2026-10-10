@@ -748,5 +748,6 @@
   "Create": "新建",
   "Push": "推送",
   "Commit and push": "提交并推送",
-  "Which vault?": "提交哪个库？"
+  "Which vault?": "提交哪个库？",
+  "Operation timed out (the process seems stuck). Reset, please retry.": "操作超时（进程疑似挂住），已复位，请重试"
 }
