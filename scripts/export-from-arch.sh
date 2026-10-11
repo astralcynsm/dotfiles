@@ -181,6 +181,7 @@ UNITS=(
   db-sync.service
   rescrobbled.service
   xdg-desktop-portal.service
+  vault-commit-watch.service
 )
 for u in "${UNITS[@]}"; do
   put "$HOME/.config/systemd/user/$u" "$SD"

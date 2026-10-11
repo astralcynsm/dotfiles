@@ -12,11 +12,20 @@
 #   capture <key> <text>     在库里新建 <title-prefix><text>.md 并在 Obsidian 打开
 #   interactive [<key>]      提交的 GUI 版（rofi/zenity，无 ii 弹框的机器用）：没改动=顺手同步，结果发通知
 #   capture-interactive [<key>]  速记的 GUI 版：收标题后建笔记，结果发通知
+#   checkpoint [<key>]       脏才询问的一次性对账（GUI 收 message → apply；干净则静默退出）
+#   watch                    常驻哨兵：Obsidian 启停边沿 → 干净拉取 / 脏则询问（systemd 服务用）
 #
 # 配置：~/.config/vault-commit/vaults.json（可用 VAULT_COMMIT_CONFIG 覆盖）
 #   { "mounts": ["/mnt/Storage"], "vaults": [{key,name,label,path}, ...] }
 #   · mounts：操作前必须已挂载，防「盘没挂 → add -A 把整库删光」
 #   · name 必须与 Obsidian 库的文件夹名一致（窗口标题靠它匹配）
+#
+# watch 环境变量（均有默认值）：
+#   VAULT_COMMIT_OBSIDIAN_PATTERN      进程匹配（默认 "obsidian/app[.]asar"；Fedora flatpak 另配）
+#   VAULT_COMMIT_WATCH_POLL            轮询秒（默认 5）
+#   VAULT_COMMIT_WATCH_PULL_INTERVAL   运行期干净拉取间隔秒（默认 600；0=关）
+#   VAULT_COMMIT_WATCH_PROMPT_COOLDOWN 同库询问冷却秒（默认 600）
+#   VAULT_COMMIT_CHECKPOINT_UI         测试注入口：替代 UI 解析直接执行的命令（参数=库 key）
 
 set -uo pipefail
 
@@ -24,6 +33,8 @@ CONFIG="${VAULT_COMMIT_CONFIG:-$HOME/.config/vault-commit/vaults.json}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/vault-commit"
 LOCKDIR="${XDG_RUNTIME_DIR:-/tmp}/vault-commit"
 OBSIDIAN_JSON="$HOME/.config/obsidian/obsidian.json"
+# watch 里要子进程自调用（checkpoint / apply），一律用绝对路径，别依赖 PATH
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 
 # ── 输出工具 ────────────────────────────────────────────────────────────
 emit_err()       { jq -nc --arg e "$1" '{ok:false, error:$e}'; exit 1; }
@@ -140,11 +151,42 @@ guard_mass_deletion() { # $1=path
   fi
 }
 
+# 护栏：rebase/merge 中途。obsidian-git 自动兜底层碰到冲突时会把仓库留在这种状态
+# （「Resolve conflicts and commit manually.」，它不 abort）——此时再 add -A / commit
+# 会把冲突现场搅得更乱，故 status/apply/interactive 一律拒绝并指路终端。
+# 两种形态（d2 实测 2026-10-10，bench 库里都真出现过）：
+#   A) .git/rebase-merge 等目录在位（本地已提交、pull --rebase 重放时撞车）
+#   B) 只有未合并索引 + autostash 残留（工作区脏、pull --rebase --autostash 弹回时撞车）
+#      —— B 没有 rebase 目录，光查目录会漏！漏掉的话 add -A 会把 <<<<<<< 标记
+#      当「已解决」直接提交推送（d2 里真的发生了），所以必须加查 ls-files -u。
+guard_mid_operation() { # $1=path
+  local p="$1" rel gp kind
+  for rel in rebase-merge rebase-apply MERGE_HEAD; do
+    gp="$(git -C "$p" rev-parse --git-path "$rel" 2>/dev/null)" || continue
+    [[ -n "$gp" ]] || continue
+    [[ "$gp" = /* ]] || gp="$p/$gp"   # --git-path 在 git -C 之下输出相对路径
+    if [[ -e "$gp" ]]; then
+      case "$rel" in
+        MERGE_HEAD) kind="merge" ;;
+        *)          kind="rebase" ;;
+      esac
+      emit_err_stage "mid-operation" \
+        "仓库正卡在 ${kind} 中途（多半是自动同步碰冲突留下的，它不自动 abort），已拒绝。去终端：cd \"$p\" && git status 看现场；继续 = git ${kind} --continue，放弃 = git ${kind} --abort"
+    fi
+  done
+  # 形态 B：没有 rebase 目录，但索引里留着未合并条目（autostash 弹回冲突的签名）
+  if [[ -n "$(git -C "$p" ls-files -u 2>/dev/null)" ]]; then
+    emit_err_stage "mid-operation" \
+      "仓库有未解决的冲突（多半是自动同步 autostash 弹回的，它留下现场就走），已拒绝。去终端：cd \"$p\" && git status 看冲突文件；改好后 git add <文件> && git commit && git push；若 git stash list 还有 autostash 残留，git stash drop 清掉"
+  fi
+}
+
 cmd_status() {
   need_config
   check_mounts
   local key="${1:-}" p name label
   require_vault "$key"; p="$VAULT_PATH"
+  guard_mid_operation "$p"
   name="$(vault_field "$key" name)"
   label="$(vault_field "$key" label)"
 
@@ -197,6 +239,7 @@ cmd_apply() {
   [[ -n "$msg" ]] || emit_err "commit message 不能为空"
 
   local p; require_vault "$key"; p="$VAULT_PATH"
+  guard_mid_operation "$p"
 
   # 连按两次快捷键时，第二次直接出局
   mkdir -p "$LOCKDIR"
@@ -325,11 +368,15 @@ cmd_capture() {
 
   : > "$file" || emit_err "创建失败：$file"
 
-  # 在 Obsidian 里打开（新文件也能按绝对路径解析）
+  # 在 Obsidian 里打开（新文件也能按绝对路径解析）。fire-and-forget，两个坑缺一不可
+  # （2026-10-11 事故的教训）：
+  #  · 不许前台等 —— Obsidian 本来没开时，xdg-open 启动的 electron 就是 App 主进程、
+  #    永不退出；前台等它 = 脚本永不返回 → ii 弹框永远 busy（之后 G/S 全静默失灵）
+  #  · 后台也得重定向 —— 子进程要是接着攥住 stdout，QML 的 StdioCollector 等 EOF 会一直等
   local uri="obsidian://open?path=$(jq -rn --arg s "$file" '$s|@uri')"
-  if ! xdg-open "$uri" >/dev/null 2>&1; then
-    (obsidian "$uri" >/dev/null 2>&1 &) || true
-  fi
+  local opener=xdg-open
+  command -v xdg-open >/dev/null 2>&1 || opener=obsidian
+  ( "$opener" "$uri" </dev/null >/dev/null 2>&1 & ) || true
 
   state_set last "$key"
   jq -nc --arg t "$title" --arg f "$file" --arg u "$uri" \
@@ -414,6 +461,13 @@ cmd_interactive() {
 
   # 没有改动就不问 message：按一下 = 顺手同步（cmd_apply 的「无改动」分支会拉远端）
   st="$(cmd_status "$key" 2>/dev/null)"
+  # status 直接失败（mid-operation / 挂载点没了等）：把真实错误亮出来，别骗用户先写 message
+  # ⚠️ 不能写 .ok // true：jq 的 // 把 false 也当空值 → 永远得到 true（踩过）
+  if [[ "$(jq -r '.ok == false' <<< "$st" 2>/dev/null)" == "true" ]]; then
+    printf '%s\n' "$st"
+    notify_result "$st"
+    exit 0
+  fi
   if [[ "$(jq -r '.clean' <<< "$st" 2>/dev/null)" == "true" ]]; then
     msg="（同步）"
   else
@@ -453,6 +507,350 @@ cmd_capture_interactive() {
   notify_result "$out"
 }
 
+# ── watch：会话边界同步哨兵（2026-10-11 第八轮）──────────────────────────
+# 与 obsidian-git 自动层的区别：**绝不自动提交**。同步点钉在 Obsidian 的会话边界：
+#   启动边沿：干净 → 静默对账（落后就拉 / 领先就补推）；脏 → 询问；冲突现场 → 只提醒
+#   退出边沿：脏 → 询问（用户要的「关闭时检查」）；干净 → 静默对账（离开前结算）
+#   运行中每 VAULT_COMMIT_WATCH_PULL_INTERVAL 秒：干净才拉（脏绝不碰）
+# 两机编辑窗口不重叠 + 非重叠 rebase → 从结构上消灭手动解冲突。
+#
+# ⚠️ safe_pull / raise_checkpoint 必须经 $() 或 & 在**子壳**里跑：
+#   · 子壳里 exec 出来的锁 fd 随子壳消亡。反例：cmd_apply 的 `exec 9>` 若在守护进程
+#     主 shell 里执行，锁会被永久攥住 → 手动 G 永远「另一个提交正在进行中」（审校抓的）
+#   · 子壳里 emit_err 的 exit 也只杀子壳，带不走守护进程
+
+WATCH_LOG_PREFIX="[vault-commit watch]"
+log() { printf '%s %s\n' "$WATCH_LOG_PREFIX" "$*" >&2; }  # stderr→journal；stdout 留给结果 token
+
+# 只读净查（GIT_OPTIONAL_LOCKS=0：不写 index，不与前台 git 抢 index.lock）
+is_clean() { # $1=path
+  [[ -z "$(GIT_OPTIONAL_LOCKS=0 git -C "$1" status --porcelain 2>/dev/null)" ]]
+}
+
+# 中途现场（A: rebase/merge 目录在 | B: ls-files -u 未合并索引）——只读版，判据同 guard_mid_operation
+is_mid_operation() { # $1=path；有现场返回 0
+  local p="$1" rel gp
+  for rel in rebase-merge rebase-apply MERGE_HEAD; do
+    gp="$(git -C "$p" rev-parse --git-path "$rel" 2>/dev/null)" || continue
+    [[ -n "$gp" ]] || continue
+    [[ "$gp" = /* ]] || gp="$p/$gp"
+    [[ -e "$gp" ]] && return 0
+  done
+  [[ -n "$(git -C "$p" ls-files -u 2>/dev/null)" ]] && return 0
+  return 1
+}
+
+# 冷却（state 目录里的 epoch 时间戳文件，tag 里的怪字符换掉）
+cool_ok() { # $1=tag $2=秒 → 0=已过冷却
+  local f last now
+  f="$STATE_DIR/watch.cool.$(printf '%s' "$1" | tr -c 'a-zA-Z0-9._-' '_')"
+  last="$(cat "$f" 2>/dev/null || echo 0)"; now="$(date +%s)"
+  (( now - last >= ${2:-600} ))
+}
+mark_cool() {
+  local f
+  f="$STATE_DIR/watch.cool.$(printf '%s' "$1" | tr -c 'a-zA-Z0-9._-' '_')"
+  mkdir -p "$STATE_DIR"; date +%s > "$f"
+}
+
+obsidian_running() { pgrep -f "${VAULT_COMMIT_OBSIDIAN_PATTERN:-obsidian/app[.]asar}" >/dev/null 2>&1; }
+
+# 通知（notify-send 失败/缺席要在 journal 里留痕，否则「哨兵活着但一声不吭」没法排查）
+vnotify() { # $1=标题 $2=正文
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a vault-commit "$1" "$2" 2>/dev/null || log "notify-send 失败：$1 / $2"
+  else
+    log "无 notify-send，通知丢弃：$1 / $2"
+  fi
+}
+
+# ── hypr 面板可用性 ─────────────────────────────────────────────────────
+# 实例动态解析：systemd 里的 HYPRLAND_INSTANCE_SIGNATURE 在 Hyprland 重启后是陈旧的；
+# `hyprctl -j instances` 不依赖环境变量（实测给 bogus env 也照常输出），取 time 最大者为当前实例。
+# 顺带拿 wl_socket，给降级 GUI（rofi/zenity）当 WAYLAND_DISPLAY 用。
+HYPR_SIG=""; HYPR_WL=""
+hypr_probe() {
+  HYPR_SIG=""; HYPR_WL=""
+  command -v hyprctl >/dev/null 2>&1 || return 1
+  local j
+  j="$(hyprctl -j instances 2>/dev/null)" || return 1
+  HYPR_SIG="$(jq -r 'max_by(.time).instance // empty' <<< "$j" 2>/dev/null)"
+  HYPR_WL="$(jq -r 'max_by(.time).wl_socket // empty' <<< "$j" 2>/dev/null)"
+  [[ -n "$HYPR_SIG" ]]
+}
+
+# 0=可用；1=用不了面板（走 GUI/通知降级）；2=锁屏中；3=全屏中（2/3 会把询问挂起待发）
+can_use_panel() {
+  hypr_probe || return 1
+  hyprctl -i "$HYPR_SIG" globalshortcuts 2>/dev/null | grep -q 'quickshell:vaultCommitOpen' || return 1
+  # 面板已开着就别 dispatch：openAndDetect() 会清空用户正在写的 message（VaultCommit.qml:103）
+  if hyprctl -i "$HYPR_SIG" -j layers 2>/dev/null \
+       | jq -e 'any(.. | objects | .namespace? // empty; . == "quickshell:vaultCommit")' >/dev/null 2>&1; then
+    return 1
+  fi
+  pgrep -x hyprlock >/dev/null 2>&1 && return 2
+  local fs
+  fs="$(hyprctl -i "$HYPR_SIG" -j activewindow 2>/dev/null | jq -r '.fullscreen // 0' 2>/dev/null)"
+  [[ "${fs:-0}" == "0" ]] || return 3
+  return 0
+}
+
+# ── safe_pull：干净库对账（落后→拉，领先→补推，双分歧→rebase 后重推）──
+# **绝不 add/commit**（脏一律 skip）→ 结构上杜绝「把半写的笔记卷进提交」和 autostash 式冲突。
+# 输出单行 token：pulled:<n> | pushed:<n> | noop | skip:* | warn:* | conflict
+# ⚠️ 调用处必须 $() 捕获（子壳运行）——fd 9 锁随子壳释放，绝不泄漏进守护进程。
+safe_pull() { # $1=key
+  local key="$1" p
+  p="$(vault_path "$key")" || { echo "skip:no-path"; return 0; }
+  is_mid_operation "$p" && { echo "skip:mid-op"; return 0; }
+  mkdir -p "$LOCKDIR"
+  exec 9>"$LOCKDIR/$key.lock"
+  flock -n 9 || { echo "skip:locked"; return 0; }   # 与手动 G 同一把锁：抢不到就跳过
+  is_clean "$p" || { echo "skip:dirty"; return 0; }
+  local ahead out out2 before after n
+  ahead="$(git -C "$p" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+  if (( ahead > 0 )); then
+    # 干净但领先 = 上次 push 没成（断网/代理）→ 补推自愈
+    out="$(GIT_NET_TIMEOUT=30 run_push "$p")" && { echo "pushed:$ahead"; return 0; }
+    if grep -qiE "non-fast-forward|fetch first|\[rejected\]" <<< "$out"; then
+      # 两边都动了：干净树先 rebase 再重推（与 apply 同策略）
+      if out2="$(GIT_NET_TIMEOUT=30 run_git_net "$p" pull --rebase)"; then
+        if out="$(GIT_NET_TIMEOUT=30 run_push "$p")"; then echo "pushed:$ahead"; else echo "warn:push-failed"; fi
+      elif is_mid_operation "$p"; then
+        echo "conflict"
+      else
+        echo "warn:pull-failed"
+      fi
+    else
+      echo "warn:push-failed"
+    fi
+    return 0
+  fi
+  before="$(git -C "$p" rev-parse HEAD 2>/dev/null)"
+  if out="$(GIT_NET_TIMEOUT=30 run_git_net "$p" pull --rebase)"; then
+    after="$(git -C "$p" rev-parse HEAD 2>/dev/null)"
+    n="$(git -C "$p" rev-list --count "$before..$after" 2>/dev/null || echo 0)"
+    if [[ "${n:-0}" == "0" ]]; then echo "noop"; else echo "pulled:$n"; fi
+  else
+    echo "warn:pull-failed"
+  fi
+  return 0
+}
+
+# 冲突现场提醒（带冷却；只提醒，绝不碰 git、绝不弹面板）
+notify_conflict() { # $1=key
+  cool_ok "conflict:$1" 21600 || return 0
+  mark_cool "conflict:$1"
+  vnotify "笔记：仓库卡在冲突中途" "「$(vault_field "$1" label)」的仓库卡在 rebase/合并中途，去终端解决（cd 到库目录先 git status）"
+}
+
+# 面板路径处理了 $1 之后，若其余库也脏，补一条通知（面板一次只处理一个库）
+raise_others_notice() { # $1=已处理的 key
+  local k q others=""
+  while IFS= read -r k; do
+    [[ -n "$k" && "$k" != "$1" ]] || continue
+    q="$(vault_path "$k")" || continue
+    is_clean "$q" || others="$others「$(vault_field "$k" label)」"
+  done < <(jq -r '.vaults[]?.key' "$CONFIG" 2>/dev/null)
+  [[ -n "$others" ]] && vnotify "笔记：还有别的库没提交" "$others 也有未提交改动（Super+Alt+G 可切库）"
+  return 0
+}
+
+# ── raise_checkpoint：弹「要不要提交」询问（全异步，不阻塞哨兵循环）──────
+# 降级链：测试注入口 → ii 面板 dispatch → GUI 流（rofi/zenity 收 message + apply）→ 通知。
+# ask.lock 防叠问；锁屏/全屏挂起到 watch.pending，条件恢复后由 check_pending 补发。
+raise_checkpoint() { # $1=key
+  local key="$1"
+  cool_ok "ask:$key" "${VAULT_COMMIT_WATCH_PROMPT_COOLDOWN:-600}" || { log "询问冷却中，跳过（$key）"; return 0; }
+  mkdir -p "$LOCKDIR" "$STATE_DIR"
+  (
+    exec 5>"$LOCKDIR/ask.lock"
+    flock -n 5 || exit 0                       # 已有询问在进行：防叠问
+    local p
+    p="$(vault_path "$key")" || exit 0
+    is_mid_operation "$p" && exit 0            # 冲突现场交给 critical 通知通道，不弹
+    is_clean "$p" && exit 0                    # 冷却期间可能已被手动提交
+
+    # 测试注入口：给什么跑什么（参数=key）
+    if [[ -n "${VAULT_COMMIT_CHECKPOINT_UI:-}" ]]; then
+      mark_cool "ask:$key"
+      "$VAULT_COMMIT_CHECKPOINT_UI" "$key" </dev/null >/dev/null 2>&1
+      exit 0
+    fi
+
+    local rc=0
+    can_use_panel || rc=$?
+    if (( rc == 0 )); then
+      if hyprctl -i "$HYPR_SIG" dispatch 'hl.dsp.global("quickshell:vaultCommitOpen")' 2>/dev/null | grep -q '^ok'; then
+        mark_cool "ask:$key"
+        log "已唤起 ii 面板询问（$key）"
+        raise_others_notice "$key"
+        exit 0
+      fi
+      log "面板 dispatch 未成功，降级 GUI/通知（$key）"
+    elif (( rc == 2 || rc == 3 )); then
+      # 锁屏/全屏：不打扰，攒到条件恢复后再发。**此处绝不能 mark_cool**——
+      # 挂起不是一次「已打扰」，烧掉冷却的话 check_pending 解锁后补发会被自己拦下
+      log "锁屏/全屏中，询问挂起（$key）"
+      state_set watch.pending "$(echo $(state_get watch.pending) "$key")"
+      exit 0
+    fi
+
+    mark_cool "ask:$key"
+    if command -v rofi >/dev/null 2>&1 || command -v zenity >/dev/null 2>&1; then
+      # 降级 GUI 从 systemd 拉起时没有 WAYLAND_DISPLAY，用 hypr 的 wl_socket 补上
+      [[ -n "$HYPR_WL" && -z "${WAYLAND_DISPLAY:-}" ]] && export WAYLAND_DISPLAY="$HYPR_WL"
+      "$SELF" checkpoint "$key" </dev/null >/dev/null 2>&1
+    else
+      vnotify "笔记：有未提交的改动" "「$(vault_field "$key" label)」有未提交的改动（按 Super+Alt+G 提交）"
+    fi
+    raise_others_notice "$key"
+  ) </dev/null >/dev/null &   # 注意：stderr 保留 → log 进 journal
+}
+
+# ── 边沿动作 ────────────────────────────────────────────────────────────
+# 启动/退出边沿行为相同：干净→静默对账；脏→问；冲突现场→只提醒
+reconcile_edge() { # $1=边沿名（日志用）
+  local edge="$1" k p r n
+  while IFS= read -r k; do
+    p="$(vault_path "$k")" || { log "$edge：$k 路径不可用，跳过"; continue; }
+    if is_mid_operation "$p"; then
+      notify_conflict "$k"
+    elif is_clean "$p"; then
+      r="$(safe_pull "$k")"
+      case "$r" in
+        pulled:*) n="${r#pulled:}"; (( n > 0 )) && vnotify "笔记已同步" "「$(vault_field "$k" label)」从另一台拉到了 $n 个提交";;
+        pushed:*) vnotify "笔记已补推" "「$(vault_field "$k" label)」把 ${r#pushed:} 个提交补推上去了";;
+        conflict) notify_conflict "$k" ;;
+        *) log "$edge：$k → safe_pull $r" ;;
+      esac
+    else
+      log "$edge：$k 有未提交改动 → 询问"
+      raise_checkpoint "$k"
+    fi
+  done < <(jq -r '.vaults[]?.key' "$CONFIG" 2>/dev/null)
+  return 0
+}
+
+# 运行期定时拉取：只碰干净的库（用户正在编辑时绝不介入）
+on_periodic_pull() {
+  local k p r n
+  while IFS= read -r k; do
+    p="$(vault_path "$k")" || continue
+    is_mid_operation "$p" && continue
+    is_clean "$p" || continue
+    r="$(safe_pull "$k")"
+    case "$r" in
+      pulled:*) n="${r#pulled:}"; (( n > 0 )) && vnotify "笔记已同步" "「$(vault_field "$k" label)」从另一台拉到了 $n 个提交";;
+      pushed:*) vnotify "笔记已补推" "「$(vault_field "$k" label)」把 ${r#pushed:} 个提交补推上去了";;
+      conflict) notify_conflict "$k" ;;
+      *) : ;;
+    esac
+  done < <(jq -r '.vaults[]?.key' "$CONFIG" 2>/dev/null)
+  return 0
+}
+
+# 挂起的询问（锁屏/全屏期间攒下的）：面板条件恢复后补发
+check_pending() {
+  local pending k
+  pending="$(state_get watch.pending)"
+  [[ -n "$pending" ]] || return 0
+  can_use_panel || return 0                    # 还不可用就继续挂
+  state_set watch.pending ""
+  for k in $(echo $pending | tr ' ' '\n' | sort -u); do raise_checkpoint "$k"; done
+  return 0
+}
+
+# ── cmd_watch：哨兵主循环 ───────────────────────────────────────────────
+cmd_watch() {
+  [[ -f "$CONFIG" ]] || { log "找不到配置文件：$CONFIG（跳过）"; exit 0; }
+  command -v jq >/dev/null 2>&1 || { log "缺少 jq"; exit 2; }
+  mkdir -p "$LOCKDIR" "$STATE_DIR"
+  # 单实例：unit 和手动跑同时会开两个哨兵（双份通知/双份拉取）。第二个静默退出
+  # （exit 0 → 不触发 Restart；这就是 unit 用 Restart=on-failure 的原因）
+  exec 8>"$LOCKDIR/watch.lock"
+  flock -n 8 || { log "另一个 watch 已在运行，退出"; exit 0; }
+  trap 'log "收到终止信号，退出"; exit 0' TERM INT
+
+  local poll="${VAULT_COMMIT_WATCH_POLL:-${VAULT_COMMIT_WATCH_INTERVAL:-5}}"
+  local pull_ivl="${VAULT_COMMIT_WATCH_PULL_INTERVAL:-600}"
+  local prev cur last_pull now
+  prev="$(state_get watch.obsidian)"
+  cur=0; obsidian_running && cur=1
+  if [[ -z "$prev" ]]; then
+    # 首次安装/状态被清：只记基线，不发边沿（防服务重启误触发）
+    log "首次运行：记录基线 obsidian=$cur（不发边沿）"
+    state_set watch.obsidian "$cur"; prev="$cur"
+  elif [[ "$prev" == "1" && "$cur" == "0" ]]; then
+    # 哨兵没盯着的时候 Obsidian 已经关了（关机/重登/服务停过）→ 补一次退出结算（对账）
+    log "启动时发现 Obsidian 已不在（期间退出未结算）"
+    state_set watch.obsidian 0; prev=0
+    reconcile_edge "退出边沿(补)"
+  fi
+  last_pull="$(date +%s)"
+  log "哨兵启动：poll=${poll}s pull=${pull_ivl}s pattern=${VAULT_COMMIT_OBSIDIAN_PATTERN:-obsidian/app[.]asar}"
+  while :; do
+    cur=0; obsidian_running && cur=1
+    if [[ "$cur" != "$prev" ]]; then
+      log "obsidian: $prev → $cur"
+      state_set watch.obsidian "$cur"
+      if [[ "$cur" == "1" ]]; then reconcile_edge "启动边沿"; else reconcile_edge "退出边沿"; fi
+      prev="$cur"
+    fi
+    check_pending
+    if [[ "$cur" == "1" && "$pull_ivl" -gt 0 ]]; then
+      now="$(date +%s)"
+      (( now < last_pull )) && last_pull="$now"          # 时钟回拨钳制
+      if (( now - last_pull >= pull_ivl )); then
+        log "运行期对账（距上次 $(( now - last_pull ))s）"
+        on_periodic_pull
+        last_pull="$now"
+      fi
+    fi
+    sleep "$poll" || break
+  done
+  log "循环退出"
+}
+
+# ── checkpoint：一次性对账（watch 的降级 GUI 流；手动也能跑）──────────────
+# 认库（缺省）→ 中途现场拒绝 → 脏才问（rofi/zenity 收 message）→ apply → 通知。
+# 干净则静默退出，方便被 watch 无脑调用。
+cmd_checkpoint() {
+  need_config
+  check_mounts
+  local key="${1:-}"
+  if [[ -z "$key" ]]; then
+    if ! key="$(detect_from_window)"; then
+      if ! key="$(detect_from_obsidian_json)"; then
+        key="$(state_get last)"
+      fi
+    fi
+  fi
+  local p; require_vault "$key"; p="$VAULT_PATH"
+  guard_mid_operation "$p"
+  local n
+  n="$(GIT_OPTIONAL_LOCKS=0 git -C "$p" status --porcelain 2>/dev/null | wc -l)"
+  if (( n == 0 )); then
+    # 干净：没得问。领先的提交留给 apply 的「顺手同步」路径补推（下面 msg=（同步））
+    if [[ "$(git -C "$p" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)" == "0" ]]; then
+      jq -nc '{ok:true, stage:"no-changes", error:"没有未提交的改动"}'
+      return 0
+    fi
+  fi
+  need_gui
+  local msg out
+  if (( n == 0 )); then
+    msg="（同步）"
+  else
+    msg="$(gui_ask "提交笔记改动？" "「$(vault_field "$key" label)」有 $n 处未提交改动。写一句 message 回车提交；留空 / Esc = 先不提交")" \
+      || { jq -nc '{ok:false, stage:"cancelled", error:"已放弃（未提交）"}'; return 0; }
+    [[ -n "$msg" ]] || { jq -nc '{ok:false, stage:"cancelled", error:"已放弃（未提交）"}'; return 0; }
+  fi
+  out="$("$SELF" apply "$key" "$msg" 2>&1)"
+  printf '%s\n' "$out"
+  notify_result "$out"
+}
+
 # ── 入口 ────────────────────────────────────────────────────────────────
 case "${1:-}" in
   list)         cmd_list ;;
@@ -463,6 +861,8 @@ case "${1:-}" in
   capture)      cmd_capture "${2:-}" "${3:-}" ;;
   interactive)  cmd_interactive "${2:-}" ;;
   capture-interactive|capture-i) cmd_capture_interactive "${2:-}" ;;
-  ""|-h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) emit_err "未知子命令：$1（可用：list / detect / status / apply / title-prefix / capture / interactive / capture-interactive）" ;;
+  checkpoint)   cmd_checkpoint "${2:-}" ;;
+  watch)        cmd_watch ;;
+  ""|-h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) emit_err "未知子命令：$1（可用：list / detect / status / apply / title-prefix / capture / interactive / capture-interactive / checkpoint / watch）" ;;
 esac

@@ -1489,6 +1489,10 @@ VAULT_COMMIT_CONFIG=/tmp/vc-test/vaults.json qs -p ~/.config/quickshell/ii/vc-ha
 #   触发/验收 = 造一个 vault 文件变化（新建/编辑笔记）→ 等 interval 到点。
 #   造形态 B：vault 侧改 b.md → clone-b fetch+reset 到 origin/main → clone-b 改同文件推 → ≤15s 出 UU。
 #   脚本与真库 data.json 存档在 cynsm-workflow/bench/（test-d2..d5.sh + real-data.json）。
+
+# ⭐ 第八轮：哨兵链路干跑不用真开 Obsidian——伪进程 ( exec -a "/usr/lib/obsidian/app.asar" sleep 600 ) &
+#   就能触发真实边沿；验证 = journal 看边沿行 + 本地是否出现远端测试提交（拉到会发通知、不写日志）。
+#   ⚠️ 该字面量绝不能出现在测试 shell 自己的 cmdline 里（幽灵边沿，见第八轮坑 3）——脚本经文件执行。
 ```
 
 ### 诚实记录
@@ -1538,6 +1542,68 @@ VAULT_COMMIT_CONFIG=/tmp/vc-test/vaults.json qs -p ~/.config/quickshell/ii/vc-ha
 **现场排障捷径**：`ps --ppid <qs pid>` 抓直系孩子 → `ps -o wchan` 看挂哪（`do_wait`=等孩子）→
 `/proc/<pid>/fd` 对 inode 找**谁攥着 stdout**。本例 stdout 只有脚本自己握着 → **杀掉脚本就能让
 QML 解套，不用重启 quickshell**（这台机器重启会连坐 cgroup 里的 QQ/Steam，Restart 不是逃生门）。
+
+### 第八轮（2026-10-11）：撤自动提交 → 会话边界同步哨兵（vault-commit watch）
+
+**决策（用户复盘拍板）。** 第六轮的 obsidian-git 自动层**撤掉**：「停止编辑 60 分钟自动
+commit+sync」的落点不可控——半写的笔记也可能被推走，时机反而制造撞车。改为**会话边界同步**：
+把两台的进度对账钉在「打开/关闭 Obsidian」两个边沿上，**绝不自动 add/commit**（message 永远
+只来自手写）。**不加** union 合并驱动——用户判断「两边不可能同时改」：同步点钉在会话边界后，
+两机编辑窗口不重叠，非重叠改动的 rebase 天然无冲突（这正是上面这个决策要保障的性质）。
+
+**机制**（`vault-commit watch` 常驻，`vault-commit-watch.service`）：
+
+| 时机 | 动作 |
+|---|---|
+| Obsidian **启动**（边沿） | 每库：干净 → 静默 `pull --rebase`（拉到 N>0 才 vnotify）；脏 → 询问；冲突现场 → 只提醒 |
+| Obsidian **退出**（边沿） | 同上（「关闭时检查有无未提交」本体） |
+| 运行中每 10 分钟 | 每库：**只对干净库**静默拉取（脏绝不碰） |
+| 其余时刻 | 什么都不做 |
+
+询问降级链（`raise_checkpoint`）：测试注入口 `VAULT_COMMIT_CHECKPOINT_UI` → ii 面板
+（`hl.dsp.global("quickshell:vaultCommitOpen")`；锁屏/全屏时**挂起到 `watch.pending`**，
+条件恢复后 `check_pending` 补发——挂起**不烧冷却**）→ rofi/zenity 流（`vault-commit checkpoint`：
+「提交笔记改动？」收 message → apply → 通知；留空/Esc=放弃）→ vnotify 通知。
+
+**实现要点**：
+- `safe_pull`：净查 `GIT_OPTIONAL_LOCKS=0 git status --porcelain`（**脏绝不拉**——从根上消灭
+  autostash 弹回那类形态 B 冲突）+ 领先时先补推、否则 `pull --rebase`；token
+  `pulled:N`/`pushed:N`/`noop`/`skip:*`/`conflict`
+- 边沿状态存 state：首次运行只记基线、不发边沿（防服务重启误触发）；但「上次见开着、启动时已关」
+  （哨兵停过/关机期间 Obsidian 退出）→ **补发一次退出边沿结算**，漏掉的脏账不丢；
+  `ask.lock`(fd 5) 防叠问、`watch.lock`(fd 8) 单实例（抢不到锁 exit 0 → 不触发 Restart）
+- watch 里子进程自调用一律绝对路径（`SELF=$(readlink -f "$BASH_SOURCE")`），别依赖 PATH
+
+**落盘**：脚本 468 → 868 行（+`watch`/`checkpoint`）；新增 unit
+`~/.config/systemd/user/vault-commit-watch.service`（`graphical-session.target` 家族，带
+`ConditionPathExists` 配置守卫）；两库撤插件（`community-plugins.json` 去条目 + `git rm -r
+.obsidian/plugins/obsidian-git`，LCS `d49704a`、SB `3f4cc2b`）；LCS 存量 staged 清账（`a4e926d`，
+用户确认「原样提交」）。跨机侧：`cynsm-workflow` 新增 `systemd/` 模板、`update-snapshot.sh`
+加 systemd 拷贝；dotfiles 同步两个文件。
+
+**实测（伪 Obsidian 干跑 + 真实两幕，用户实机验收）**：
+- 伪进程 `( exec -a "/usr/lib/obsidian/app.asar" sleep 600 ) &` 触发**真实哨兵**：
+  17:31:47 边沿 → ~4s 把远端测试提交（cb77326）拉到本地 + vnotify 投递、退出边沿静默
+- 真实重开 Obsidian：18:07:31 启动边沿 → 三行 `safe_pull noop`（干净库逐库对账）
+- 真实关窗（预置 scratch 脏文件）：18:27:52 **同秒**「退出边沿 → 询问 → 已唤起」→ 面板
+  渲染于焦点屏（`hyprctl layers` 见 `namespace: quickshell:vaultCommit`）；用户核对摘要
+  「都没问题」→ 点 X = 放弃、库保持脏（清理后恢复）
+- 通知由 quickshell 承接（它是本机 `org.freedesktop.Notifications` 服务方）；vnotify 失败会
+  留 journal「notify-send 失败」痕，无痕 = 投递成功
+
+**第八轮新坑**：
+1. `ConditionPathExists` 属于 **[Unit] 段**——误放进 [Service] 只留一行 warning
+   「Unknown key … ignoring」然后被静默忽略（本机实测踩过；daemon-reload 后 journal 干净才算对）。
+2. 本机 Lua 版 `hyprctl -j layers` 的 JSON 形状非常规——jq 会把层名打成数字串。**查层一律用
+   文本** `hyprctl layers | grep`（本次面板验证靠它找到 `namespace: quickshell:vaultCommit`；
+  差点被 jq 的假阴性误导成「面板没弹」）。
+3. **幽灵边沿**：watch 的进程识别是 `pgrep -f 'obsidian/app[.]asar'`——**任何** cmdline 含该
+   字面量的进程都会被当成 Obsidian（比如在命令行里内联这个模式字符串的测试 shell 自己）。
+   测试脚本必须**经文件执行**（cmdline 只剩脚本路径），别把字面量写进命令行。
+4. `pulled:N>0` 与 `pushed:N` 分支**只发通知、不写 journal 日志**（设计如此）——排障时
+   「journal 里没有拉取行」不等于没拉，先查通知。
+5. watch 是**轮询**（默认 5s），不是插件钩子：Obsidian 极快自重启（更新）若停机 <5s 会漏
+   退出边沿——由重启后的启动边沿补一次「脏就询问」兜住；哨兵服务自身重启同理（首轮不发边沿）。
 
 ---
 

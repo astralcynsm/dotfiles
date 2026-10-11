@@ -1,5 +1,5 @@
 # 主力机上处于 enabled 状态的 systemd user 单元（快照，供工作机参照）
-# 由 scripts/export-from-arch.sh 生成于 2026-10-08T02:52:44+08:00
+# 由 scripts/export-from-arch.sh 生成于 2026-10-11T18:53:04+08:00
 
 darkman.service
 ii-stats.service
@@ -10,6 +10,7 @@ pipewire.service
 quickshell-ii.service
 rime_counter.service
 solaar.service
+vault-commit-watch.service
 wireplumber.service
 xdg-user-dirs.service
 ydotool.service

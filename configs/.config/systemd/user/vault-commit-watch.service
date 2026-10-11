@@ -1,0 +1,45 @@
+[Unit]
+Description=vault-commit watch —— 笔记库同步哨兵（Obsidian 启停时拉取 / 提交询问）
+Documentation=file:%h/.local/bin/vault-commit
+# [锚点选择] graphical-session.target 而不是 hyprland-session.target：
+#   · 哨兵不以「Hyprland 已就绪」为前提 —— hyprctl 每次调用动态解析实例
+#     （hyprctl -j instances，Hyprland 重启也自愈），拿不到就降级 GUI/通知
+#   · 标准目标，第二台 Fedora/GNOME 直接 enable 就能用（hyprland-session.target 是本机自造）
+#   · 与 ii-stats / rime_counter 完全同族（After + PartOf + WantedBy 三件套）
+After=graphical-session.target
+PartOf=graphical-session.target
+# [防连崩] 崩因多半是一次性外部原因（/mnt/Storage 没回来、D-Bus 抖动）——
+# 配额放宽让它自愈；真坏了进 failed，systemctl --user status vault-commit-watch 可见。
+# （照 quickshell-ii 的教训：StartLimitInterval=60/Burst=10 曾被 4 秒烧光变一次性阵亡）
+StartLimitIntervalSec=300
+StartLimitBurst=10
+# 配置不在 = 这台机器没配这个工作流 → 干净地 skip，而不是崩溃循环
+# （ConditionPathExists 属于 [Unit] 段；放 [Service] 会被 systemd 忽略——2026-10-11 实测踩过）
+ConditionPathExists=%h/.config/vault-commit/vaults.json
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/vault-commit watch
+# systemd user 默认 PATH 不含 %h/.local/bin；watch 子进程要自调用（checkpoint/apply），
+# 还要用 jq/flock/hyprctl/notify-send/rofi/zenity
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Obsidian 进程识别。⚠️ Arch 是 electron 主进程（pgrep -x obsidian 永不匹配）——
+# Fedora 若为 flatpak，用 drop-in 覆盖：systemctl --user edit vault-commit-watch
+#   → Environment=VAULT_COMMIT_OBSIDIAN_PATTERN=...
+Environment=VAULT_COMMIT_OBSIDIAN_PATTERN=obsidian/app[.]asar
+# 探测节拍与各定时器（秒）。PULL_INTERVAL=600：运行期每 10 分钟只对干净库拉取（脏绝不碰）
+Environment=VAULT_COMMIT_WATCH_POLL=5
+Environment=VAULT_COMMIT_WATCH_PULL_INTERVAL=600
+Environment=VAULT_COMMIT_WATCH_PROMPT_COOLDOWN=600
+# 只在失败时重拉：单实例冲突/配置缺失这类「正常退出」（exit 0）不该被反复拉起。
+# 不写 KillMode（用默认 control-group）：停服务时把在飞的 git 孩子一起收走是对的。
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target
